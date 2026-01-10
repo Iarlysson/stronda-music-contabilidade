@@ -20,13 +20,23 @@
       <option value="colab">Colaborador</option>
     </select>
 
-    <label>Usuário</label>
-    <input id="loginUser" type="text" placeholder="Ex: admin" />
+    <form id="formLogin" method="post" autocomplete="on">
+  <label>Usuário</label>
+  <input id="loginUser"
+         name="username"
+         type="text"
+         autocomplete="username"
+         placeholder="Ex: admin" />
 
-    <label>Senha</label>
-    <input id="loginSenha" type="password" placeholder="••••••••" />
+  <label>Senha</label>
+  <input id="loginSenha"
+         name="password"
+         type="password"
+         autocomplete="current-password"
+         placeholder="••••••••" />
 
-    <button type="button" onclick="fazerLogin()">Entrar</button>
+  <button id="btnEntrar" type="submit">Entrar</button>
+</form>
 
     <hr style="opacity:.2; margin:16px 0;">
 
