@@ -43,37 +43,46 @@ async function salvarNoFirebase() {
 
   const payload = {
     atualizadoEm: new Date().toISOString(),
-    ocorrencias,
-    maquinas,
-    acertos,
-    usuarios,
+    ocorrencias, maquinas, acertos, usuarios,
   };
 
-  await setDoc(docRef, payload, { merge: true });
+  try {
+    await setDoc(docRef, payload, { merge: true });
+  } catch (err) {
+    console.error("❌ Firebase save error:", err);
+    alert("❌ Não consegui salvar no Firebase.\n\n" + (err?.message || err));
+  }
 }
 
+
 function iniciarSincronizacaoFirebase() {
-  onSnapshot(docRef, (snap) => {
-    carregandoDoFirebase = true;
+  onSnapshot(
+    docRef,
+    (snap) => {
+      carregandoDoFirebase = true;
 
-    const data = snap.data() || {};
+      const data = snap.data() || {};
+      ocorrencias = Array.isArray(data.ocorrencias) ? data.ocorrencias : [];
+      maquinas    = Array.isArray(data.maquinas) ? data.maquinas : [];
+      acertos     = Array.isArray(data.acertos) ? data.acertos : [];
+      usuarios    = Array.isArray(data.usuarios) ? data.usuarios : [];
 
-    ocorrencias = Array.isArray(data.ocorrencias) ? data.ocorrencias : [];
-    maquinas    = Array.isArray(data.maquinas) ? data.maquinas : [];
-    acertos     = Array.isArray(data.acertos) ? data.acertos : [];
-    usuarios    = Array.isArray(data.usuarios) ? data.usuarios : [];
-    
-    carregandoDoFirebase = false;
-    
-    garantirAdminPadrao();
+      carregandoDoFirebase = false;
 
-    // ✅ Atualiza tela automaticamente quando chegar dado novo
-    try { atualizarAlertaOcorrencias(); } catch {}
-    try { listarOcorrencias(); } catch {}
-    try { listarMaquinas(); } catch {}
-    try { atualizarStatus(); } catch {}
-    try { if (typeof listarLocaisSalvos === "function") listarLocaisSalvos(); } catch {}
-  });
+      garantirAdminPadrao();
+
+      try { atualizarAlertaOcorrencias(); } catch {}
+      try { listarOcorrencias(); } catch {}
+      try { listarMaquinas(); } catch {}
+      try { atualizarStatus(); } catch {}
+      try { if (typeof listarLocaisSalvos === "function") listarLocaisSalvos(); } catch {}
+    },
+    (err) => {
+      carregandoDoFirebase = false;
+      console.error("❌ Firebase snapshot error:", err);
+      alert("❌ Firebase não conectou no celular.\n\n" + (err?.message || err));
+    }
+  );
 }
 
 
