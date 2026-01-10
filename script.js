@@ -12,13 +12,14 @@ import {
 
 // ✅ COLOQUE AQUI SEU firebaseConfig do Firebase Console
 const firebaseConfig = {
-  apiKey: "SUA_KEY",
-  authDomain: "SEU_DOMINIO.firebaseapp.com",
-  projectId: "SEU_PROJECT_ID",
-  storageBucket: "SEU_BUCKET.appspot.com",
-  messagingSenderId: "SEU_SENDER",
-  appId: "SEU_APPID",
+  apiKey: "...",
+  authDomain: "...",
+  projectId: "...",
+  storageBucket: "...",
+  messagingSenderId: "...",
+  appId: "..."
 };
+
 
 const appFirebase = initializeApp(firebaseConfig);
 const db = getFirestore(appFirebase);
@@ -31,6 +32,8 @@ let ocorrencias = [];
 let maquinas = [];
 let acertos = [];
 let usuarios = [];
+let sessaoUsuario = null;
+
 
 // trava pra não ficar salvando em loop
 let carregandoDoFirebase = false;
@@ -145,7 +148,9 @@ iniciarSincronizacaoFirebase();
 atualizarAlertaOcorrencias();
 
 function garantirAdminPadrao() {
-  const temAdmin = (usuarios || []).some(u => String(u.tipo || "").toUpperCase() === "ADMIN");
+  const temAdmin = (usuarios || []).some(
+    (u) => String(u.tipo || "").toUpperCase() === "ADMIN"
+  );
   if (temAdmin) return;
 
   usuarios.push({
@@ -153,7 +158,7 @@ function garantirAdminPadrao() {
     tipo: "ADMIN",
     nome: "ADMIN",
     user: "admin",
-    senha: "1234"
+    senha: "1234",
   });
 
   salvarNoFirebase();
@@ -881,7 +886,7 @@ function abrirDetalhesCliente(estab) {
   `;
 }
 
-async function apagarMaquina() {
+async function apagarMaquinaAdmin() {
   const cred = await pedirCredenciaisAdmin();
   if (cred === null) return;
 
@@ -974,10 +979,6 @@ function abrirDetalheMaquina(numero) {
 let maquinaSelecionadaNumero = null;
 
 function carregarMaquinaPorNumero() {
-  const detFone = document.getElementById("detFone");
-
-  
-  function carregarMaquinaPorNumero() {
   const detNumero = document.getElementById("detNumero");
   const detEstab = document.getElementById("detEstab");
   const detCliente = document.getElementById("detCliente");
@@ -991,24 +992,15 @@ function carregarMaquinaPorNumero() {
   const numeroInput = detNumero.value.trim().toUpperCase();
   detNumero.value = numeroInput;
 
-  // ... mantém o resto da sua função igual, só usando essas variáveis ...
-}
-
-
-
-  detNumero.value = numeroInput;
-
   // se apagou o número, limpa tudo
   if (!numeroInput) {
     maquinaSelecionadaNumero = null;
-    detEstab.value = "";
-    detCliente.value = "";
-    detEndereco.value = "";
-    detStatus.value = "ALUGADA";
+    if (detEstab) detEstab.value = "";
+    if (detCliente) detCliente.value = "";
+    if (detEndereco) detEndereco.value = "";
+    if (detStatus) detStatus.value = "ALUGADA";
     if (detFone) detFone.value = "";
-    if (typeof tituloMaquina !== "undefined" && tituloMaquina) {
-      tituloMaquina.textContent = `🔧 Máquina`;
-    }
+    if (tituloMaquina) tituloMaquina.textContent = `🔧 Máquina`;
     return;
   }
 
@@ -1018,46 +1010,37 @@ function carregarMaquinaPorNumero() {
   // não achou
   if (!m) {
     maquinaSelecionadaNumero = null;
-    detEstab.value = "";
-    detCliente.value = "";
-    detEndereco.value = "";
-    detStatus.value = "ALUGADA";
+    if (detEstab) detEstab.value = "";
+    if (detCliente) detCliente.value = "";
+    if (detEndereco) detEndereco.value = "";
+    if (detStatus) detStatus.value = "ALUGADA";
     if (detFone) detFone.value = "";
-    if (typeof tituloMaquina !== "undefined" && tituloMaquina) {
-      tituloMaquina.textContent = `🔧 Máquina não encontrada`;
-    }
+    if (tituloMaquina) tituloMaquina.textContent = `🔧 Máquina não encontrada`;
     return;
   }
 
   // achou -> preenche tudo
   maquinaSelecionadaNumero = m.numero;
 
-  detEstab.value = (m.estab || "").toUpperCase();
-  detCliente.value = (m.cliente || "").toUpperCase();
+  if (detEstab) detEstab.value = (m.estab || "").toUpperCase();
+  if (detCliente) detCliente.value = (m.cliente || "").toUpperCase();
 
-  if (m.lat != null && m.lng != null) {
-    detEndereco.value = `LAT:${Number(m.lat).toFixed(6)} | LNG:${Number(m.lng).toFixed(6)}`;
-  } else {
-    detEndereco.value = (m.endereco || "").toUpperCase();
+  if (detEndereco) {
+    if (m.lat != null && m.lng != null) {
+      detEndereco.value = `LAT:${Number(m.lat).toFixed(6)} | LNG:${Number(m.lng).toFixed(6)}`;
+    } else {
+      detEndereco.value = (m.endereco || "").toUpperCase();
+    }
   }
 
-  detStatus.value = (m.status || "ALUGADA");
+  if (detStatus) detStatus.value = (m.status || "ALUGADA");
+  if (detFone) detFone.value = pegarTelefoneDaMaquina(m);
 
-  // ✅ TELEFONE (puxa do cadastro)
-  const foneSalvo =
-    (m.foneFormatado && String(m.foneFormatado)) ||
-    formatarTelefoneBR(String((m.ddd || "") + (m.tel || ""))) ||
-    "";
-
-  if (detFone) detFone.value = foneSalvo;
-
-  // título
-  if (typeof tituloMaquina !== "undefined" && tituloMaquina) {
-    tituloMaquina.textContent = `🔧 ${m.estab} (JB Nº ${m.numero})`;
-  }
+  if (tituloMaquina) tituloMaquina.textContent = `🔧 ${m.estab} (JB Nº ${m.numero})`;
 }
 
 
+  
 function salvarAlteracoesMaquina() {
   if (!exigirAdmin()) return;
 
@@ -1834,81 +1817,6 @@ function pegarValorPrimeiroIdQueExiste(ids) {
   return "";
 }
 
-// Deixa as funções visíveis para onclick="" do HTML
-window.fazerLogin = function () {
-  // tenta achar o select do tipo
-  let tipo = pegarValorPrimeiroIdQueExiste(["tipoLogin", "tipoAcesso", "tipo", "tipo_accesso"]);
-  tipo = (tipo || "ADMIN").toUpperCase();
-
-  if (tipo.includes("ADMIN")) tipo = "ADMIN";
-  if (tipo.includes("COLAB")) tipo = "COLAB";
-
-  // tenta achar inputs de usuário e senha (vários IDs possíveis)
-  const user = pegarValorPrimeiroIdQueExiste(["loginUser", "usuario", "user", "username", "loginUsuario"]).toLowerCase();
-  const senha = pegarValorPrimeiroIdQueExiste(["loginSenha", "loginPass", "senha", "password", "loginPassword"]);
-
-
-  if (!user || !senha) {
-    alert("❌ Preencha usuário e senha.");
-    return;
-  }
-
-  const u = (usuarios || []).find(x =>
-    String(x.tipo).toUpperCase() === tipo &&
-    String(x.user).toLowerCase() === user &&
-    String(x.senha) === senha
-  );
-
-  if (!u) {
-    alert("❌ Login inválido.");
-    return;
-  }
-
-  salvarSessao(u);
-  mostrarApp();
-};
-
-window.pubOcAutoPorNumero = function () {
-  atualizarPublicoOcorrenciaAuto();
-};
-
-// ✅ GARANTE QUE O HTML (onclick) ENXERGA AS FUNÇÕES
-window.fazerLogin = window.fazerLogin || function () {
-  // tenta achar o select do tipo (vários ids possíveis)
-  const pegar = (ids) => {
-    for (const id of ids) {
-      const el = document.getElementById(id);
-      if (el) return (el.value || "").trim();
-    }
-    return "";
-  };
-
-  let tipo = pegar(["tipoLogin", "tipoAcesso", "tipo_de_acesso", "tipo", "tipo_acesso"]).toUpperCase();
-  if (!tipo) tipo = "ADMIN";
-  if (tipo.includes("ADMIN")) tipo = "ADMIN";
-  if (tipo.includes("COLAB")) tipo = "COLAB";
-
-  const user = pegar(["loginUser", "usuario", "user", "username", "loginUsuario"]).toLowerCase();
-  const senha = pegar(["loginSenha", "senha", "password", "loginPassword"]);
-
-  if (!user || !senha) return alert("❌ Preencha usuário e senha.");
-
-  const u = (usuarios || []).find(x =>
-    String(x.tipo).toUpperCase() === tipo &&
-    String(x.user).toLowerCase() === user &&
-    String(x.senha) === senha
-  );
-
-  if (!u) return alert("❌ Login inválido.");
-
-  salvarSessao(u);
-  mostrarApp();
-};
-
-window.pubOcAutoPorNumero = window.pubOcAutoPorNumero || function () {
-  atualizarPublicoOcorrenciaAuto();
-};
-
 
 function pegarTelefoneDaMaquina(m) {
   if (!m) return "";
@@ -1950,28 +1858,6 @@ function abrirWhats() {
 window.ligarTelefone = ligarTelefone;
 window.abrirWhats = abrirWhats;
 
-
-// =====================
-// 📞 LIGAR / 💬 WHATSAPP (DETALHE DA MÁQUINA)
-// Usa o campo id="detFone"
-// =====================
-
-
-function ligarTelefone() {
-  const numero = pegarNumeroWhatsDoDetalhe();
-  if (!numero) return alert("❌ Informe um telefone válido no campo do detalhe.");
-  window.location.href = "tel:" + numero;
-}
-
-function abrirWhats() {
-  const numero = pegarNumeroWhatsDoDetalhe();
-  if (!numero) return alert("❌ Informe um telefone válido no campo do detalhe.");
-  window.open("https://wa.me/55" + numero, "_blank");
-}
-
-// garante que onclick="" do HTML enxergue
-window.ligarTelefone = ligarTelefone;
-window.abrirWhats = abrirWhats;
 
 
 // =====================
