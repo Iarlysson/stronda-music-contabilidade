@@ -16,8 +16,9 @@
 
     <label>Tipo de acesso</label>
     <select id="tipoLogin">
-      <option value="admin">Administrador</option>
-      <option value="colab">Colaborador</option>
+      <option value="ADMIN">Administrador</option>
+      <option value="COLAB">Colaborador</option>
+
     </select>
 
     <form id="formLogin" autocomplete="on">
@@ -35,7 +36,7 @@
          autocomplete="current-password"
          placeholder="••••••••" />
 
-  <button id="btnEntrar" type="submit">Entrar</button>
+  <button id="btnEntrar" type="button" onclick="fazerLogin()">Entrar</button>
 </form>
 
     <hr style="opacity:.2; margin:16px 0;">
