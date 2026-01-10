@@ -2196,3 +2196,83 @@ async function trocarCredenciaisAdmin() {
 }
 
 window.trocarCredenciaisAdmin = trocarCredenciaisAdmin;
+
+
+function exportarDados() {
+  // (opcional) se quiser admin-only:
+  // if (!exigirAdmin()) return;
+
+  const payload = {
+    versao: 1,
+    exportadoEm: new Date().toISOString(),
+    dados: {
+      usuarios: JSON.parse(localStorage.getItem("usuarios") || "[]"),
+      maquinas: JSON.parse(localStorage.getItem("maquinas") || "[]"),
+      acertos: JSON.parse(localStorage.getItem("acertos") || "[]"),
+      ocorrencias: JSON.parse(localStorage.getItem("ocorrencias") || "[]"),
+    }
+  };
+
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `stronda_backup_${new Date().toISOString().slice(0,10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  alert("✅ Backup exportado!");
+}
+
+function importarDadosArquivo(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const obj = JSON.parse(String(reader.result || "{}"));
+      const dados = obj?.dados || obj; // aceita tanto {dados:{...}} quanto {...}
+
+      if (!dados) throw new Error("Arquivo inválido.");
+
+      // valida mínimo
+      const maquinasImp = Array.isArray(dados.maquinas) ? dados.maquinas : null;
+      const ocorrImp = Array.isArray(dados.ocorrencias) ? dados.ocorrencias : null;
+      const acertosImp = Array.isArray(dados.acertos) ? dados.acertos : null;
+      const usuariosImp = Array.isArray(dados.usuarios) ? dados.usuarios : null;
+
+      if (!maquinasImp && !ocorrImp && !acertosImp && !usuariosImp) {
+        throw new Error("Backup sem dados reconhecidos.");
+      }
+
+      if (usuariosImp) localStorage.setItem("usuarios", JSON.stringify(usuariosImp));
+      if (maquinasImp) localStorage.setItem("maquinas", JSON.stringify(maquinasImp));
+      if (acertosImp) localStorage.setItem("acertos", JSON.stringify(acertosImp));
+      if (ocorrImp) localStorage.setItem("ocorrencias", JSON.stringify(ocorrImp));
+
+      // atualiza variáveis do app sem precisar recarregar
+      try {
+        usuarios = JSON.parse(localStorage.getItem("usuarios") || "[]");
+        maquinas = JSON.parse(localStorage.getItem("maquinas") || "[]");
+        acertos = JSON.parse(localStorage.getItem("acertos") || "[]");
+        ocorrencias = JSON.parse(localStorage.getItem("ocorrencias") || "[]");
+      } catch {}
+
+      atualizarAlertaOcorrencias();
+      alert("✅ Dados importados com sucesso!");
+
+      // limpa input para permitir importar o mesmo arquivo de novo se quiser
+      const inp = document.getElementById("inpImportar");
+      if (inp) inp.value = "";
+
+    } catch (e) {
+      alert("❌ Falha ao importar: " + (e?.message || e));
+    }
+  };
+
+  reader.readAsText(file);
+}
