@@ -35,13 +35,18 @@ button {
     letter-spacing: 0.5px; /* ✅ deixa mais bonito */
 }
 
-.box {
-    background: #1e293b;
-    padding: 20px;
-    border-radius: 14px;
-    max-width: 420px;
-    margin: auto;
+.box{
+  background: #1e293b;
+  padding: 20px;
+  border-radius: 14px;
+
+  width: min(420px, 100%);
+  margin: 0 auto;
+
+  position: relative;
+  padding-bottom: 100px; /* por causa do botão voltar fixo */
 }
+
 
 label {
     display: block;
@@ -290,3 +295,33 @@ button {
   text-shadow: 0 0 15px rgba(255, 0, 0, 0.55);
 }
 
+
+/* Mobile friendly */
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 12px;
+}
+
+.box, .container, .card, .tela {
+  width: 100%;
+  max-width: 520px;
+  margin: 0 auto;
+}
+
+input, select, button, textarea {
+  width: 100%;
+  font-size: 16px; /* evita zoom automático no iPhone */
+}
+
+@media (max-width: 480px) {
+  body { padding: 10px; }
+  h1, h2 { font-size: 20px; }
+  button { padding: 12px 14px; }
+}
+
+@media (max-width: 480px){
+  .box{ padding: 16px; padding-bottom: 100px; }
+  body{ padding: 10px; }
+}
