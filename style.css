@@ -1,0 +1,292 @@
+body {
+    background: #0f172a;
+    color: #fff;
+    font-family: Arial;
+    text-align: center;
+    padding: 20px;
+}
+
+.menu {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 320px;
+  margin: auto;
+}
+
+/* ✅ Só os botões do MENU (maiores e top) */
+.menu button{
+  font-size: 15px;
+  letter-spacing: 0.8px;
+  padding: 10px;
+  border-radius: 14px;
+}
+
+
+button {
+    padding: 14px;
+    border: none;
+    border-radius: 10px;
+    font-weight: bold;
+    cursor: pointer;
+    background: #38bdf8;
+
+    font-size: 15px;      /* ✅ aumenta o texto */
+    letter-spacing: 0.5px; /* ✅ deixa mais bonito */
+}
+
+.box {
+    background: #1e293b;
+    padding: 20px;
+    border-radius: 14px;
+    max-width: 420px;
+    margin: auto;
+}
+
+label {
+    display: block;
+    text-align: left;
+    margin-top: 12px;
+    font-size: 14px;
+}
+
+input, select {
+    width: 100%;
+    padding: 8px;
+    margin-top: 4px;
+    border-radius: 6px;
+    border: none;
+}
+
+.voltar {
+    background: #22c55e;
+    margin-bottom: 10px;
+}
+
+.escondido {
+    display: none;
+}
+
+ul {
+    list-style: none;
+    padding: 0;
+}
+
+li {
+    background: #0f172a;
+    padding: 10px;
+    margin-top: 10px;
+    border-radius: 8px;
+}
+#resultado {
+    margin-top: 15px;
+    margin-bottom: 15px;
+    pointer-events: none;
+    position: relative;
+    z-index: 1;
+}
+
+button {
+    position: relative;
+    z-index: 10;
+}
+.box {
+    position: relative;
+}
+.linha-relogio{
+  display: flex;
+  gap: 25px;          /* AQUI separa os dois quadrados */
+  margin-top: 12px;
+}
+
+.campo-relogio{
+  flex: 1;
+}
+
+.campo-relogio label{
+  display: block;
+  margin-bottom: 8px; /* dá respiro entre o texto e o quadrado */
+}
+
+.campo-relogio input{
+  width: 100%;
+}
+
+/* VOLTAR SEMPRE EMBAIXO */
+.btn-voltar{
+  position: fixed !important;
+  left: 50% !important;
+  bottom: 18px !important;
+  transform: translateX(-50%) !important;
+
+  width: min(420px, calc(100% - 40px)) !important;
+  padding: 14px !important;
+  border-radius: 12px !important;
+
+  z-index: 9999 !important;
+}
+
+/* evita o conteúdo ficar escondido atrás do botão */
+.box{
+  padding-bottom: 100px;
+}
+.btn-danger{
+  background: #f87171;
+  color: #111;
+}
+
+.btn-danger:hover{
+  background: #ef4444;
+}
+
+
+.acoes-telefone {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.acoes-telefone button {
+  flex: 1;
+  padding: 10px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.acoes-telefone button:first-child {
+  background: #1e90ff;
+  color: #fff;
+}
+
+.acoes-telefone button:last-child {
+  background: #25D366;
+  color: #fff;
+}
+
+
+
+
+#btnOcorrencias{
+  position: relative;
+}
+
+/* 2 bolinhas (esquerda e direita) */
+#btnOcorrencias.tem-alerta::before,
+#btnOcorrencias.tem-alerta::after{
+  content:"";
+  position:absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background:#ef4444;
+  box-shadow: 0 0 0 3px rgba(15, 23, 42, .9);
+
+  animation: alertaPiscar 1s infinite; /* ✅ AQUI FAZ PISCAR */
+}
+
+/* esquerda */
+#btnOcorrencias.tem-alerta::before{
+  left: 45px;
+}
+
+/* direita */
+#btnOcorrencias.tem-alerta::after{
+  right: 45px;
+}
+
+@keyframes alertaPiscar{
+  0%, 100% { opacity: 1; transform: translateY(-50%) scale(1); }
+  50%      { opacity: .35; transform: translateY(-50%) scale(1.35); }
+}
+
+
+#subtitulo{
+  font-size: 20px;      /* aumenta */
+  font-weight: 800;     /* mais forte */
+  letter-spacing: 1px;  /* mais “top” */
+  margin-top: -6px;
+  margin-bottom: 18px;
+
+  color: #fffb00;       /* chamativo (mesma cor dos botões) */
+  text-transform: uppercase;
+}
+
+
+#subtitulo{
+  text-shadow: 0 0 15px rgba(255, 0, 0, 0.55);
+}
+
+#tituloApp,
+#tituloLogin{
+  font-size: 32px;
+  font-weight: 900;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin: 10px 0 6px;
+
+  color: #ff0000;
+  text-shadow:
+    0 0 12px rgba(255, 0, 0, 0.55),
+    0 0 24px rgba(0, 179, 255, 0.35);
+}
+
+#tituloApp,
+#tituloLogin{
+  font-size: 32px;
+  font-weight: 900;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin: 10px 0 6px;
+
+  color: #ff0000;
+  text-shadow:
+    0 0 12px rgba(255, 0, 0, 0.55),
+    0 0 24px rgba(0, 179, 255, 0.35);
+}
+
+
+
+/* subtítulo amarelo na tela de login */
+#subtituloLogin{
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  margin-top: 0;
+  margin-bottom: 18px;
+
+  color: #fffb00;
+  text-transform: uppercase;
+
+  text-shadow: 0 0 15px rgba(255, 0, 0, 0.55);
+}
+
+
+/* ===== TELA LOGIN: TÍTULO E ACESSO ===== */
+#tituloLogin{
+  font-size: 32px;
+  font-weight: 900;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin: 0 0 6px;
+
+  color: #ff0000; /* vermelho */
+  text-shadow:
+    0 0 12px rgba(255, 0, 0, 0.55),
+    0 0 24px rgba(0, 179, 255, 0.35);
+}
+
+#acessoLogin{
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  margin: 0 0 14px;
+
+  color: #fffb00; /* amarelo */
+  text-transform: uppercase;
+  text-shadow: 0 0 15px rgba(255, 0, 0, 0.55);
+}
+

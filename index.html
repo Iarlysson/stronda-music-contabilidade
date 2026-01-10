@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Stronda Music</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- TELA LOGIN (aparece primeiro) -->
+  <div id="telaLogin" class="box">
+    <h2 id="tituloLogin" style="margin-top:0;">🎶 Stronda Music</h2>
+    <p id="acessoLogin" style="margin:0 0 14px;">🔐 Acesso</p>
+
+
+    <label>Tipo de acesso</label>
+    <select id="tipoLogin">
+      <option value="admin">Administrador</option>
+      <option value="colab">Colaborador</option>
+    </select>
+
+    <label>Usuário</label>
+    <input id="loginUser" type="text" placeholder="Ex: admin" />
+
+    <label>Senha</label>
+    <input id="loginSenha" type="password" placeholder="••••••••" />
+
+    <button type="button" onclick="fazerLogin()">Entrar</button>
+
+    <hr style="opacity:.2; margin:16px 0;">
+
+    <h3 style="margin:0 0 10px;">🛠 Registrar Defeito Jukebox</h3>
+
+    <label>Número da Máquina</label>
+    <input id="pubOcNum" oninput="pubOcAutoPorNumero()" />
+
+    <label>Nome do Estabelecimento</label>
+    <input id="pubOcEstab" type="text" readonly>
+
+    <label>Observações</label>
+    <textarea id="pubOcObs" rows="4"
+      style="width:100%; padding:10px; border-radius:10px; border:none; margin-top:6px;"></textarea>
+
+    <button type="button" onclick="salvarOcorrenciaPublica()">Enviar Ocorrência</button>
+  </div>
+
+  <!-- APP (fica escondido até logar) -->
+  <div id="app" class="escondido">
+
+    <h1 id="tituloApp">🎶 Stronda Music</h1>
+    <p id="subtitulo">Sistema de Controle</p>
+
+    <!-- MENU -->
+    <div id="menu" class="menu">
+      <button onclick="abrir('acerto')">⚡ Acerto</button>
+      <button onclick="abrir('status')">🟢 Status</button>
+      <button onclick="abrir('cadastro')">➕ Cadastro de Máquina</button>
+      <button onclick="abrir('clientes')">👥 Máquinas Cadastradas</button>
+      <button id="btnOcorrencias" onclick="abrir('ocorrencias')">🛠 Ocorrências</button>
+      <button onclick="abrirHistoricoVendas()">📊 Fechamento de Caixa</button>
+      <button onclick="trocarCredenciaisAdmin()">🔐 Trocar Usuário/Senha (ADMIN)</button>
+      <button onclick="abrir('colaboradores')">👤 Colaboradores </button>
+      <button onclick="sair()">🚪 Sair</button>
+    </div>
+
+    <!-- ACERTO -->
+    <div id="acerto" class="box escondido">
+      <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+      <h2>⚡ Acerto Rápido</h2>
+
+      <label>Número da Jukebox</label>
+      <input type="text" id="numAcerto" oninput="autoPorNumero()">
+
+      <label>Nome do Estabelecimento</label>
+      <input type="text" id="estabAcerto" oninput="autoPorEstab()">
+
+      <div class="linha-relogio">
+        <div class="campo-relogio">
+          <label>Relógio Anterior</label>
+          <input type="number" id="relogioAnterior" oninput="atualizarPreviewAcerto()">
+        </div>
+        <div class="campo-relogio">
+          <label>Relógio Atual</label>
+          <input type="number" id="relogioAtual" oninput="atualizarPreviewAcerto()">
+        </div>
+      </div>
+
+      <label>Valor Pix (empresa)</label>
+      <input type="number" id="pix" oninput="atualizarPreviewAcerto()">
+
+      <label>Valor em Dinheiro</label>
+      <input type="number" id="dinheiro" oninput="atualizarPreviewAcerto()">
+
+      <label>% do Cliente</label>
+      <input type="number" id="porcentagem" oninput="atualizarPreviewAcerto()">
+
+      <p id="resultado"></p>
+
+      <button onclick="salvarAcerto()">Salvar Acerto</button>
+    </div>
+
+    <!-- STATUS -->
+    <div id="status" class="box escondido">
+      <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+      <h2>Status de Acertos</h2>
+      <ul id="listaStatus"></ul>
+    </div>
+
+    <!-- DETALHES DO CLIENTE -->
+    <div id="detalhesStatus" class="box escondido">
+      <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+      <h2 id="tituloDetalhes">📊 Acertos do Mês</h2>
+      <ul id="listaDetalhes"></ul>
+      <p id="resumoDetalhes"></p>
+    </div>
+
+    <!-- CADASTRO -->
+    <div id="cadastro" class="box escondido">
+      <h2>➕ Cadastro de Máquina</h2>
+
+      <label>Número da Jukebox</label>
+      <input id="numMaquina" type="text">
+
+      <label>Nome do Estabelecimento</label>
+      <input id="nomeEstab" type="text">
+
+      <label>Nome do Cliente</label>
+      <input id="nomeCliente" type="text">
+
+      <label>Telefone (com DDD)</label>
+      <input id="foneCliente" type="text" placeholder="(61) 99999-9999" inputmode="numeric">
+
+      <label>Endereço / Localização</label>
+      <input id="endereco" type="text">
+
+      <button type="button" onclick="pegarLocalizacaoCadastro()">📍 Pegar Localização (GPS)</button>
+
+      <label>% base do cliente</label>
+      <input id="porcBase" type="number">
+
+      <button onclick="salvarMaquina()">Salvar Máquina</button>
+      <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar ao Menu</button>
+    </div>
+
+    <!-- CLIENTES -->
+    <div id="clientes" class="box escondido">
+      <h2>👥 Máquinas Cadastradas</h2>
+      <ul id="listaMaquinas"></ul>
+      <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+    </div>
+
+    <!-- DETALHE DA MÁQUINA -->
+    <div id="detalheMaquina" class="box escondido">
+      <h2 id="tituloMaquina">🔧 Máquina</h2>
+
+      <label>Número (JB)</label>
+      <input id="detNumero" type="text" oninput="carregarMaquinaPorNumero()">
+
+      <label>Nome do Estabelecimento</label>
+      <input id="detEstab" type="text">
+
+      <label>Nome do Cliente</label>
+      <input id="detCliente" type="text">
+
+      <label>Telefone (com DDD)</label>
+      <input id="detFone" type="text" placeholder="(61) 99999-9999" inputmode="numeric">
+
+      <div class="acoes-telefone">
+        <button type="button" onclick="ligarTelefone()">📞 Ligar</button>
+        <button type="button" onclick="abrirWhats()">💬 WhatsApp</button>
+      </div>
+
+      <label>Endereço / Localização</label>
+      <input id="detEndereco" type="text">
+
+      <button type="button" onclick="atualizarLocalizacaoDetalhe()">
+        📍 Buscar Localização (GPS) (ADMIN)
+      </button>
+
+      <label>Status</label>
+      <select id="detStatus">
+        <option value="ALUGADA">ALUGADA</option>
+        <option value="DEPOSITO">DEPÓSITO</option>
+      </select>
+
+      <button id="btnSalvar" onclick="salvarAlteracoesMaquina()">Salvar Alterações (ADMIN)</button>
+      <button id="btnApagar" class="btn-danger" onclick="apagarMaquina()">🗑 Apagar Máquina (ADMIN)</button>
+
+      <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar ao Menu</button>
+    </div>
+
+
+
+     <!-- COLABORADORES (ADMIN) -->
+<div id="colaboradores" class="box escondido">
+  <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+  <h2>👤 Colaboradores (ADMIN)</h2>
+
+  <label>Nome do Colaborador</label>
+  <input id="colabNome" type="text" placeholder="Ex: JOÃO SILVA" />
+
+  <label>Usuário (login)</label>
+  <input id="colabUser" type="text" placeholder="Ex: joao" />
+
+  <label>Senha</label>
+  <input id="colabSenha" type="password" placeholder="••••••••" />
+
+  <button type="button" onclick="adicionarColaborador()">➕ Adicionar Colaborador</button>
+
+  <hr style="opacity:.2; margin:16px 0;">
+
+  <h3 style="margin:0 0 10px;">📋 Lista de Colaboradores</h3>
+  <ul id="listaColabs"></ul>
+</div>
+
+     
+
+    <!-- OCORRÊNCIAS -->
+    <div id="ocorrencias" class="box escondido">
+      <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+
+      <h2>🛠 Ocorrências</h2>
+
+      <label>Número da Máquina</label>
+      <input id="ocNum" type="text" oninput="ocAutoPorNumero()">
+
+      <label>Nome do Estabelecimento</label>
+      <input id="ocEstab" type="text" readonly>
+
+      <label>Observações</label>
+      <textarea id="ocObs" rows="4"
+        style="width:100%; padding:10px; border-radius:10px; border:none; margin-top:6px;"></textarea>
+
+      <button type="button" onclick="salvarOcorrencia()">Salvar Ocorrência</button>
+
+      <hr style="opacity:.2; margin:16px 0;">
+
+      <h3 style="margin:0 0 10px;">📋 Pendentes</h3>
+      <ul id="listaOcorrencias"></ul>
+    </div>
+
+    <!-- LOCALIZAÇÃO -->
+    <div id="localizacao" class="box escondido">
+      <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+      <h2>📍 Localização do Estabelecimento</h2>
+      <button onclick="pegarLocalizacao()">Obter Localização</button>
+      <p id="local"></p>
+    </div>
+
+    <!-- HISTÓRICO DE VENDAS (AGORA NO LUGAR CERTO) -->
+    <div class="box escondido" id="historicoVendas">
+      <h2 style="margin-top:0;">📊 Histórico de Vendas</h2>
+
+      <label>Data Inicial</label>
+      <input type="date" id="hvInicio" style="width:100%; padding:10px; border-radius:10px; border:none; margin-bottom:10px;">
+
+      <label>Data Final</label>
+      <input type="date" id="hvFim" style="width:100%; padding:10px; border-radius:10px; border:none; margin-bottom:10px;">
+
+      <div style="display:flex; gap:10px; flex-wrap:wrap; margin:10px 0;">
+        <button type="button" onclick="renderHistoricoVendas(false)" style="flex:1;">
+          🔎 Ver Totais do Período
+        </button>
+        <button type="button" onclick="renderHistoricoVendas(true)" style="flex:1;">
+          📅 Ver Diário
+        </button>
+      </div>
+
+      <div id="hvResultado" style="margin-top:12px;"></div>
+
+      <button type="button" onclick="voltar()" style="margin-top:14px;">
+        ← Voltar ao Menu
+      </button>
+    </div>
+
+  </div><!-- /#app -->
+
+  <!-- SEU JS -->
+  <script src="script.js"></script>
+</body>
+</html>
