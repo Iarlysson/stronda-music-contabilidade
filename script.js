@@ -1,6 +1,78 @@
-let ocorrencias = JSON.parse(localStorage.getItem("ocorrencias")) || [];
-let maquinas = JSON.parse(localStorage.getItem("maquinas")) || [];
-let acertos = JSON.parse(localStorage.getItem("acertos")) || [];
+// =====================
+// 🔥 FIREBASE (Firestore) - SINCRONIZAR PC + CELULAR
+// =====================
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc,
+  onSnapshot
+} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+// ✅ COLOQUE AQUI SEU firebaseConfig do Firebase Console
+const firebaseConfig = {
+  apiKey: "SUA_KEY",
+  authDomain: "SEU_DOMINIO.firebaseapp.com",
+  projectId: "SEU_PROJECT_ID",
+  storageBucket: "SEU_BUCKET.appspot.com",
+  messagingSenderId: "SEU_SENDER",
+  appId: "SEU_APPID",
+};
+
+const appFirebase = initializeApp(firebaseConfig);
+const db = getFirestore(appFirebase);
+
+// ✅ UM ÚNICO DOC COM TODOS OS DADOS (mais simples)
+const docRef = doc(db, "stronda", "dados");
+
+// estado do app (vai substituir localStorage)
+let ocorrencias = [];
+let maquinas = [];
+let acertos = [];
+let usuarios = [];
+
+// trava pra não ficar salvando em loop
+let carregandoDoFirebase = false;
+
+async function salvarNoFirebase() {
+  if (carregandoDoFirebase) return;
+
+  const payload = {
+    atualizadoEm: new Date().toISOString(),
+    ocorrencias,
+    maquinas,
+    acertos,
+    usuarios,
+  };
+
+  await setDoc(docRef, payload, { merge: true });
+}
+
+function iniciarSincronizacaoFirebase() {
+  onSnapshot(docRef, (snap) => {
+    carregandoDoFirebase = true;
+
+    const data = snap.data() || {};
+
+    ocorrencias = Array.isArray(data.ocorrencias) ? data.ocorrencias : [];
+    maquinas    = Array.isArray(data.maquinas) ? data.maquinas : [];
+    acertos     = Array.isArray(data.acertos) ? data.acertos : [];
+    usuarios    = Array.isArray(data.usuarios) ? data.usuarios : [];
+    
+    carregandoDoFirebase = false;
+    
+    garantirAdminPadrao();
+
+    // ✅ Atualiza tela automaticamente quando chegar dado novo
+    try { atualizarAlertaOcorrencias(); } catch {}
+    try { listarOcorrencias(); } catch {}
+    try { listarMaquinas(); } catch {}
+    try { atualizarStatus(); } catch {}
+    try { if (typeof listarLocaisSalvos === "function") listarLocaisSalvos(); } catch {}
+  });
+}
+
 
 
 function atualizarAlertaOcorrencias() {
@@ -26,27 +98,9 @@ if (!localStorage.getItem("ADMIN_SENHA")) {
 }
 
 
-
-// =====================
-// 🔐 SENHA DO ADMIN (salva)
-// =====================
-function getAdminSenha() {
-  return localStorage.getItem("ADMIN_SENHA") || "1234"; // padrão inicial
-}
-
-function setAdminSenha(nova) {
-  localStorage.setItem("ADMIN_SENHA", String(nova));
-}
-
-
-
 // =====================
 // ✅ LOGIN / USUÁRIOS
 // =====================
-let usuarios = JSON.parse(localStorage.getItem("usuarios")) || [];
-let sessaoUsuario = null; // sempre começa deslogado
-localStorage.removeItem("sessaoUsuario"); // limpa qualquer resto antigo
-
 
 function formatarTelefoneBR(valor) {
   // fica só com números
@@ -87,16 +141,26 @@ function ativarMascaraTelefoneCampos() {
 
 window.addEventListener("load", ativarMascaraTelefoneCampos);
 
+iniciarSincronizacaoFirebase();
 atualizarAlertaOcorrencias();
 
-// cria ADMIN padrão se não existir nenhum
 function garantirAdminPadrao() {
-  if (!usuarios.length) {
-    usuarios.push({ id: Date.now(), tipo: "ADMIN", nome: "ADMIN", user: "admin", senha: "1234" });
-    localStorage.setItem("usuarios", JSON.stringify(usuarios));
-  }
+  const temAdmin = (usuarios || []).some(u => String(u.tipo || "").toUpperCase() === "ADMIN");
+  if (temAdmin) return;
+
+  usuarios.push({
+    id: Date.now(),
+    tipo: "ADMIN",
+    nome: "ADMIN",
+    user: "admin",
+    senha: "1234"
+  });
+
+  salvarNoFirebase();
 }
-garantirAdminPadrao();
+
+
+
 
 function salvarSessao(u) {
   sessaoUsuario = { tipo: u.tipo, nome: u.nome, user: u.user };
@@ -205,28 +269,6 @@ window.addEventListener("load", () => {
 });
 
 
-// login
-function entrarLogin(tipo) {
-  const user = (document.getElementById("loginUser")?.value || "").trim().toLowerCase();
-  const senha =
-  (document.getElementById("loginSenha")?.value ||
-   document.getElementById("loginPass")?.value ||
-   "").trim();
-
-
-  if (!user || !senha) return alert("❌ Preencha usuário e senha.");
-
-  const u = usuarios.find(x =>
-    x.tipo === tipo &&
-    String(x.user).toLowerCase() === user &&
-    String(x.senha) === senha
-  );
-
-  if (!u) return alert("❌ Login inválido.");
-
-  salvarSessao(u);
-  mostrarApp();
-}
 
 // =====================
 // ✅ ADMIN: criar colaboradores
@@ -243,8 +285,15 @@ function adicionarColaborador() {
   const existe = usuarios.some(x => String(x.user).toLowerCase() === user);
   if (existe) return alert("⚠️ Já existe esse usuário.");
 
-  usuarios.push({ id: Date.now(), tipo: "COLAB", nome, user, senha });
-  localStorage.setItem("usuarios", JSON.stringify(usuarios));
+  usuarios.push({
+  id: Date.now(),
+  tipo: "COLAB",
+  nome: nome,
+  user: user,
+  senha: senha
+});
+
+  salvarNoFirebase();
 
   document.getElementById("colabNome").value = "";
   document.getElementById("colabUser").value = "";
@@ -281,7 +330,7 @@ function listarColaboradores() {
     btn.onclick = () => {
       if (!confirm("Remover esse colaborador?")) return;
       usuarios = usuarios.filter(x => x.id !== c.id);
-      localStorage.setItem("usuarios", JSON.stringify(usuarios));
+      salvarNoFirebase();
       listarColaboradores();
     };
 
@@ -334,7 +383,7 @@ function salvarOcorrenciaPublica() {
     origem: "CLIENTE" // só pra identificar
   });
 
-  localStorage.setItem("ocorrencias", JSON.stringify(ocorrencias));
+  salvarNoFirebase();
 
   document.getElementById("pubOcNum").value = "";
   document.getElementById("pubOcEstab").value = "";
@@ -465,7 +514,7 @@ function salvarMaquina() {
 
 
 
-  localStorage.setItem("maquinas", JSON.stringify(maquinas));
+  salvarNoFirebase();
   alert("✅ Máquina cadastrada com sucesso");
 
   $("numMaquina").value = "";
@@ -669,11 +718,11 @@ function salvarAcerto() {
     data: new Date().toISOString(),
   });
 
-  localStorage.setItem("acertos", JSON.stringify(acertos));
+  salvarNoFirebase();
 
   // ✅ atualiza o "último relógio" da máquina para o próximo acerto
   maquina.ultimoRelogio = rAtu;
-  localStorage.setItem("maquinas", JSON.stringify(maquinas));
+  salvarNoFirebase();
 
   alert("✅ Acerto salvo com sucesso");
 
@@ -739,22 +788,6 @@ function atualizarStatus() {
   });
 }
 
-
-/* ======================
-   LISTA DE MÁQUINAS
-====================== */
-function listarMaquinas() {
-  const listaMaquinas = $("listaMaquinas");
-  if (!listaMaquinas) return;
-
-  listaMaquinas.innerHTML = "";
-
-  maquinas.forEach((m) => {
-    const li = document.createElement("li");
-    li.textContent = `${m.estab} (Jukebox ${m.numero})`;
-    listaMaquinas.appendChild(li);
-  });
-}
 
 /* ======================
    LOCALIZAÇÃO
@@ -943,7 +976,26 @@ let maquinaSelecionadaNumero = null;
 function carregarMaquinaPorNumero() {
   const detFone = document.getElementById("detFone");
 
+  
+  function carregarMaquinaPorNumero() {
+  const detNumero = document.getElementById("detNumero");
+  const detEstab = document.getElementById("detEstab");
+  const detCliente = document.getElementById("detCliente");
+  const detEndereco = document.getElementById("detEndereco");
+  const detStatus = document.getElementById("detStatus");
+  const detFone = document.getElementById("detFone");
+  const tituloMaquina = document.getElementById("tituloMaquina");
+
+  if (!detNumero) return;
+
   const numeroInput = detNumero.value.trim().toUpperCase();
+  detNumero.value = numeroInput;
+
+  // ... mantém o resto da sua função igual, só usando essas variáveis ...
+}
+
+
+
   detNumero.value = numeroInput;
 
   // se apagou o número, limpa tudo
@@ -1048,11 +1100,11 @@ function salvarAlteracoesMaquina() {
     acertos = acertos.filter(a =>
       String(a.estab || "").toUpperCase().trim() !== estabAntigo
     );
-    localStorage.setItem("acertos", JSON.stringify(acertos));
+    salvarNoFirebase();
   }
 
   // ✅ salva máquinas
-  localStorage.setItem("maquinas", JSON.stringify(maquinas));
+  salvarNoFirebase();
 
   alert("✅ Alterações salvas!");
 
@@ -1211,7 +1263,7 @@ async function atualizarLocalizacaoDetalhe() {
       // (opcional) manter também em endereco
       m.endereco = texto;
 
-      localStorage.setItem("maquinas", JSON.stringify(maquinas));
+      salvarNoFirebase();
       alert("✅ Localização atualizada!");
     },
     (err) => {
@@ -1300,15 +1352,6 @@ function abrirLocalizacaoMaquina() {
 }
 
 
-
-// =====================
-// LOCALIZAÇÃO - LISTAR SALVAS + ABRIR MAPS
-// =====================
-
-function abrirNoMaps(lat, lng) {
-  const url = `https://www.google.com/maps?q=${lat},${lng}`;
-  window.open(url, "_blank");
-}
 
 function mostrarPainelLocal(m) {
   const painel = document.getElementById("painelLocal");
@@ -1400,7 +1443,7 @@ function salvarOcorrencia() {
     data: new Date().toISOString(),
   });
 
-  localStorage.setItem("ocorrencias", JSON.stringify(ocorrencias));
+  salvarNoFirebase();
 
   document.getElementById("ocNum").value = "";
   document.getElementById("ocEstab").value = "";
@@ -1484,7 +1527,8 @@ function concluirOcorrencia(id) {
   if (!ok) return;
 
   ocorrencias = ocorrencias.filter(o => o.id !== id);
-  localStorage.setItem("ocorrencias", JSON.stringify(ocorrencias));
+  salvarNoFirebase();
+
   listarOcorrencias();
   atualizarAlertaOcorrencias();
 }
@@ -1519,8 +1563,8 @@ async function apagarMaquina() {
   const filtrados = acertos.filter(a => String(a.estab || "").toUpperCase().trim() !== estabKey);
   acertos.splice(0, acertos.length, ...filtrados);
 
-  localStorage.setItem("maquinas", JSON.stringify(maquinas));
-  localStorage.setItem("acertos", JSON.stringify(acertos));
+  salvarNoFirebase();
+  
   atualizarAlertaOcorrencias();
 
   alert("🗑 Máquina apagada com sucesso!");
@@ -1911,22 +1955,7 @@ window.abrirWhats = abrirWhats;
 // 📞 LIGAR / 💬 WHATSAPP (DETALHE DA MÁQUINA)
 // Usa o campo id="detFone"
 // =====================
-function pegarNumeroWhatsDoDetalhe() {
-  const el = document.getElementById("detFone");
-  const tel = (el?.value || "").trim();
 
-  // só números
-  let nums = tel.replace(/\D/g, "");
-
-  // se tiver 55 na frente, remove
-  if (nums.startsWith("55") && nums.length >= 12) nums = nums.slice(2);
-
-  // precisa ter pelo menos DDD + número
-  if (nums.length < 10) return "";
-
-  // limita a 11 dígitos (DDD + 9)
-  return nums.slice(0, 11);
-}
 
 function ligarTelefone() {
   const numero = pegarNumeroWhatsDoDetalhe();
@@ -1943,63 +1972,6 @@ function abrirWhats() {
 // garante que onclick="" do HTML enxergue
 window.ligarTelefone = ligarTelefone;
 window.abrirWhats = abrirWhats;
-
-
-async function trocarSenhaAdmin() {
-  // pede senha atual
-  const atual = await pedirSenhaAdmin();
-  if (atual === null) return;
-
-  const senhaCorreta = getAdminSenha();
-  if (String(atual) !== String(senhaCorreta)) {
-    alert("❌ Senha atual incorreta.");
-    return;
-  }
-
-  const nova = prompt("Digite a NOVA senha do ADMIN (mínimo 4 dígitos):");
-  if (nova === null) return;
-
-  const novaLimpa = String(nova).trim();
-  if (novaLimpa.length < 4) {
-    alert("❌ A senha precisa ter no mínimo 4 caracteres.");
-    return;
-  }
-
-  const confirma = prompt("Confirme a NOVA senha do ADMIN:");
-  if (confirma === null) return;
-
-  if (String(confirma).trim() !== novaLimpa) {
-    alert("❌ Confirmação não bate.");
-    return;
-  }
-
-  setAdminSenha(novaLimpa);
-  alert("✅ Senha do ADMIN alterada com sucesso!");
-}
-
-// deixa acessível no onclick
-window.trocarSenhaAdmin = trocarSenhaAdmin;
-
-
-// =====================
-// 🔐 SENHA ADMIN (salva)
-// =====================
-function getAdminSenha() {
-  return localStorage.getItem("ADMIN_SENHA") || "1234";
-}
-function setAdminSenha(nova) {
-  localStorage.setItem("ADMIN_SENHA", String(nova));
-}
-
-// cria padrão se ainda não existir
-if (!localStorage.getItem("ADMIN_SENHA")) {
-  localStorage.setItem("ADMIN_SENHA", "1234");
-}
-
-// valida a senha digitada comparando com a senha atual salva
-function validarSenhaAdminDigitada(senhaDigitada) {
-  return String(senhaDigitada || "") === String(getAdminSenha());
-}
 
 
 // =====================
@@ -2128,7 +2100,7 @@ async function trocarSenhaAdmin() {
   if (!admin) return alert("❌ Admin não encontrado.");
 
   admin.senha = novaLimpa;
-  localStorage.setItem("usuarios", JSON.stringify(usuarios));
+  salvarNoFirebase();
 
   alert("✅ Senha do ADMIN alterada com sucesso!");
 }
@@ -2185,7 +2157,7 @@ async function trocarCredenciaisAdmin() {
   admin.nome = "ADMIN"; // mantém nome padrão (se quiser mudar também, eu faço)
   admin.senha = novaSenhaLimpa;
 
-  localStorage.setItem("usuarios", JSON.stringify(usuarios));
+  salvarNoFirebase();
 
   // se estiver logado, atualiza sessão em memória também
   if (typeof sessaoUsuario !== "undefined" && sessaoUsuario) {
@@ -2276,3 +2248,69 @@ function importarDadosArquivo(event) {
 
   reader.readAsText(file);
 }
+
+
+// =====================
+// ✅ EXPOR FUNÇÕES PRO HTML (porque script.js é type="module")
+// =====================
+Object.assign(window, {
+  // login
+  fazerLogin,
+  sair,
+
+  // navegação
+  abrir,
+  voltar,
+
+  // ocorrência pública
+  pubOcAutoPorNumero,
+  salvarOcorrenciaPublica,
+
+  // acerto
+  autoPorNumero,
+  autoPorEstab,
+  atualizarPreviewAcerto,
+  salvarAcerto,
+
+  // cadastro máquina
+  pegarLocalizacaoCadastro,
+  salvarMaquina,
+
+  // lista/detalhe máquina
+  listarMaquinas,
+  abrirDetalheMaquina,
+  carregarMaquinaPorNumero,
+  atualizarLocalizacaoDetalhe,
+  salvarAlteracoesMaquina,
+  apagarMaquina,
+
+  // ocorrências internas
+  ocAutoPorNumero,
+  salvarOcorrencia,
+  listarOcorrencias,
+  concluirOcorrencia,
+
+  // telefone/whats
+  ligarTelefone,
+  abrirWhats,
+
+  // histórico
+  abrirHistoricoVendas,
+  renderHistoricoVendas,
+
+  // colaboradores
+  adicionarColaborador,
+  listarColaboradores,
+
+  // localização/Maps
+  pegarLocalizacao,
+  abrirNoMaps,
+  listarLocaisSalvos,
+  mostrarPainelLocal,
+  autoLocalPorNumero,
+  autoLocalPorEstab,
+  abrirLocalizacaoMaquina,
+});
+
+
+
