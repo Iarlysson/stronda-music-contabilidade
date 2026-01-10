@@ -62,18 +62,20 @@
     <h1 id="tituloApp">🎶 Stronda Music</h1>
     <p id="subtitulo">Sistema de Controle</p>
 
+
     <!-- MENU -->
-    <div id="menu" class="menu">
-      <button onclick="abrir('acerto')">⚡ Acerto</button>
-      <button onclick="abrir('status')">🟢 Status</button>
-      <button onclick="abrir('cadastro')">➕ Cadastro de Máquina</button>
-      <button onclick="abrir('clientes')">👥 Máquinas Cadastradas</button>
-      <button id="btnOcorrencias" onclick="abrir('ocorrencias')">🛠 Ocorrências</button>
-      <button onclick="abrirHistoricoVendas()">📊 Fechamento de Caixa</button>
-      <button onclick="trocarCredenciaisAdmin()">🔐 Trocar Usuário/Senha (ADMIN)</button>
-      <button onclick="abrir('colaboradores')">👤 Colaboradores </button>
-      <button onclick="sair()">🚪 Sair</button>
-    </div>
+<div id="menu" class="menu">
+  <button onclick="abrir('acerto')">⚡ Acerto</button>
+  <button onclick="abrir('status')">🟢 Status</button>
+  <button onclick="abrir('cadastro')">➕ Cadastro de Máquina</button>
+  <button onclick="abrir('clientes')">👥 Máquinas Cadastradas</button>
+  <button id="btnOcorrencias" onclick="abrir('ocorrencias')">🛠 Ocorrências</button>
+  <button onclick="abrirHistoricoVendas()">📊 Fechamento de Caixa</button>
+  <button onclick="trocarCredenciaisAdmin()">🔐 Trocar Usuário/Senha (ADMIN)</button>
+  <button onclick="abrir('colaboradores')">👤 Colaboradores</button>
+  <button onclick="sair()">🚪 Sair</button>
+</div>
+
 
     <!-- ACERTO -->
     <div id="acerto" class="box escondido">
@@ -285,9 +287,37 @@
       </button>
     </div>
 
-  </div><!-- /#app -->
 
-  <!-- SEU JS -->
-  <script src="script.js"></script>
+      </div><!-- /#app -->
+
+  
+  
+<!-- Firebase (backend online) -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js";
+  import { getAuth } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js";
+  import { getFirestore } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyDwKkCtERVgvOsmEH1X_T1gqn66bDRHsYo",
+    authDomain: "stronda-music-controle.firebaseapp.com",
+    projectId: "stronda-music-controle",
+    storageBucket: "stronda-music-controle.firebasestorage.app",
+    messagingSenderId: "339385914034",
+    appId: "1:339385914034:web:601d747b7151d507ad6fab"
+  };
+
+  const app = initializeApp(firebaseConfig);
+
+  // deixa disponível pro seu script.js
+  window.firebaseApp = app;
+  window.auth = getAuth(app);
+  window.db = getFirestore(app);
+</script>
+
+<!-- Seu sistema -->
+<script src="script.js"></script>
+
+
 </body>
 </html>
