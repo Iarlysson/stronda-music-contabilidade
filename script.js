@@ -205,28 +205,6 @@ window.addEventListener("load", () => {
 });
 
 
-// login
-function entrarLogin(tipo) {
-  const user = (document.getElementById("loginUser")?.value || "").trim().toLowerCase();
-  const senha =
-  (document.getElementById("loginSenha")?.value ||
-   document.getElementById("loginPass")?.value ||
-   "").trim();
-
-
-  if (!user || !senha) return alert("❌ Preencha usuário e senha.");
-
-  const u = usuarios.find(x =>
-    x.tipo === tipo &&
-    String(x.user).toLowerCase() === user &&
-    String(x.senha) === senha
-  );
-
-  if (!u) return alert("❌ Login inválido.");
-
-  salvarSessao(u);
-  mostrarApp();
-}
 
 // =====================
 // ✅ ADMIN: criar colaboradores
@@ -1762,16 +1740,15 @@ function limparHistoricoVendas() {
 
 // Botão "Entrar" do login chama fazerLogin()
 function fazerLogin() {
-  // pega o tipo do select (pode estar "Administrador", "ADMIN", etc.)
-  let tipo = (document.getElementById("tipoLogin")?.value || "ADMIN").toString().toUpperCase();
+  let tipo = (document.getElementById("tipoLogin")?.value || "admin").toLowerCase();
 
-  // normaliza para os mesmos valores do seu sistema: ADMIN / COLAB
-  if (tipo.includes("ADMIN")) tipo = "ADMIN";
-  if (tipo.includes("COLAB") || tipo.includes("COLABOR")) tipo = "COLAB";
+  if (tipo === "admin") tipo = "ADMIN";
+  else tipo = "COLAB";
 
-  // usa a sua função real
   entrarLogin(tipo);
 }
+window.fazerLogin = fazerLogin;
+
 
 // Campo "Número da Máquina" na ocorrência pública chama pubOcAutoPorNumero()
 function pubOcAutoPorNumero() {
@@ -2196,3 +2173,14 @@ async function trocarCredenciaisAdmin() {
 }
 
 window.trocarCredenciaisAdmin = trocarCredenciaisAdmin;
+
+
+document.addEventListener("DOMContentLoaded", () => {
+  const form = document.getElementById("formLogin");
+  if (form) {
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      fazerLogin();
+    });
+  }
+});
