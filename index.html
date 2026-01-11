@@ -21,23 +21,26 @@
 
     </select>
 
-    <form id="formLogin" autocomplete="on">
+    <div id="formLogin" autocomplete="off">
+
   <label>Usuário</label>
   <input id="loginUser"
-         name="username"
          type="text"
-         autocomplete="username"
+         autocomplete="off"
+         autocapitalize="none"
+         spellcheck="false"
          placeholder="Ex: admin" />
 
-  <label>Senha</label>
-  <input id="loginSenha"
-         name="password"
-         type="password"
-         autocomplete="current-password"
-         placeholder="••••••••" />
+ <label>Senha</label>
+<div class="senha-wrapper">
+  <input id="loginSenha" type="password" placeholder="Senha">
+  <button type="button" class="btn-olho" onclick="toggleSenha('loginSenha', this)">👁️</button>
+</div>
 
-  <button id="btnEntrar" type="button" onclick="fazerLogin()">Entrar</button>
-</form>
+
+  <button type="button" id="btnEntrar" onclick="fazerLogin()">Entrar</button>
+</div>
+
 
     <hr style="opacity:.2; margin:16px 0;">
 
@@ -70,48 +73,51 @@
   <button onclick="abrir('cadastro')">➕ Cadastro de Máquina</button>
   <button onclick="abrir('clientes')">👥 Máquinas Cadastradas</button>
   <button id="btnOcorrencias" onclick="abrir('ocorrencias')">🛠 Ocorrências</button>
+  <button id="btnCreditosRemotos" onclick="abrir('creditosRemotos')">
+  💳 Créditos Remotos
+</button>
   <button onclick="abrirHistoricoVendas()">📊 Fechamento de Caixa</button>
-  <button onclick="trocarCredenciaisAdmin()">🔐 Trocar Usuário/Senha (ADMIN)</button>
+  <button onclick="trocarSenhaAdmin()">🔐 Trocar Senha (ADMIN)</button>
   <button onclick="abrir('colaboradores')">👤 Colaboradores</button>
   <button onclick="sair()">🚪 Sair</button>
 </div>
 
 
     <!-- ACERTO -->
-    <div id="acerto" class="box escondido">
-      <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
-      <h2>⚡ Acerto Rápido</h2>
+<div id="acerto" class="box escondido" autocomplete="off">
+  <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+  <h2>⚡ Acerto Rápido</h2>
 
-      <label>Número da Jukebox</label>
-      <input type="text" id="numAcerto" oninput="autoPorNumero()">
+  <label>Número da Jukebox</label>
+  <input type="text" id="numAcerto" autocomplete="off" oninput="autoPorNumero()">
 
-      <label>Nome do Estabelecimento</label>
-      <input type="text" id="estabAcerto" oninput="autoPorEstab()">
+  <label>Nome do Estabelecimento</label>
+  <input type="text" id="estabAcerto" autocomplete="off" oninput="autoPorEstab()">
 
-      <div class="linha-relogio">
-        <div class="campo-relogio">
-          <label>Relógio Anterior</label>
-          <input type="number" id="relogioAnterior" oninput="atualizarPreviewAcerto()">
-        </div>
-        <div class="campo-relogio">
-          <label>Relógio Atual</label>
-          <input type="number" id="relogioAtual" oninput="atualizarPreviewAcerto()">
-        </div>
-      </div>
-
-      <label>Valor Pix (empresa)</label>
-      <input type="number" id="pix" oninput="atualizarPreviewAcerto()">
-
-      <label>Valor em Dinheiro</label>
-      <input type="number" id="dinheiro" oninput="atualizarPreviewAcerto()">
-
-      <label>% do Cliente</label>
-      <input type="number" id="porcentagem" oninput="atualizarPreviewAcerto()">
-
-      <p id="resultado"></p>
-
-      <button onclick="salvarAcerto()">Salvar Acerto</button>
+  <div class="linha-relogio">
+    <div class="campo-relogio">
+      <label>Relógio Anterior</label>
+      <input type="number" id="relogioAnterior" autocomplete="off" oninput="atualizarPreviewAcerto()">
     </div>
+    <div class="campo-relogio">
+      <label>Relógio Atual</label>
+      <input type="number" id="relogioAtual" autocomplete="off" oninput="atualizarPreviewAcerto()">
+    </div>
+  </div>
+
+  <label>Valor Pix (empresa)</label>
+  <input type="number" id="pix" autocomplete="off" oninput="atualizarPreviewAcerto()">
+
+  <label>Valor em Dinheiro</label>
+  <input type="number" id="dinheiro" autocomplete="off" oninput="atualizarPreviewAcerto()">
+
+  <label>% do Cliente</label>
+  <input type="number" id="porcentagem" autocomplete="off" oninput="atualizarPreviewAcerto()">
+
+  <p id="resultado"></p>
+
+  <button type="button" onclick="salvarAcerto()">Salvar Acerto</button>
+</div>
 
     <!-- STATUS -->
     <div id="status" class="box escondido">
@@ -213,11 +219,12 @@
   <label>Nome do Colaborador</label>
   <input id="colabNome" type="text" placeholder="Ex: JOÃO SILVA" />
 
+  <label>WhatsApp do colaborador (DDD + número)</label>
+<input id="colabWhats" type="text" placeholder="Ex: 61993631181" inputmode="numeric" autocomplete="off" />
+
   <label>Usuário (login)</label>
   <input id="colabUser" type="text" placeholder="Ex: joao" />
 
-  <label>Senha</label>
-  <input id="colabSenha" type="password" placeholder="••••••••" />
 
   <button type="button" onclick="adicionarColaborador()">➕ Adicionar Colaborador</button>
 
@@ -234,6 +241,10 @@
       <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
 
       <h2>🛠 Ocorrências</h2>
+
+      <button type="button" onclick="avisarOcorrenciaWhats()">
+    📲 Avisar colaborador no WhatsApp
+  </button>
 
       <label>Número da Máquina</label>
       <input id="ocNum" type="text" oninput="ocAutoPorNumero()">
@@ -253,13 +264,42 @@
       <ul id="listaOcorrencias"></ul>
     </div>
 
+
+  <div id="creditosRemotos" class="box escondido">
+  <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+  <h2>💳 Créditos Remotos</h2>
+
+  <label>Nº da Máquina</label>
+  <input id="crNum" type="text" placeholder="Ex: 12" oninput="crAutoPorNumero()" />
+
+  <label>Estabelecimento</label>
+  <input id="crEstab" type="text" disabled />
+
+  <p id="crInfo" style="margin:10px 0; opacity:.9;"></p>
+
+  <label>Valor do crédito (R$)</label>
+  <input id="crValor" type="number" step="0.01" placeholder="Ex: 50" />
+
+  <button type="button" onclick="salvarCreditoRemoto()">✅ Lançar Crédito</button>
+</div>
+
+
+
+
     <!-- LOCALIZAÇÃO -->
-    <div id="localizacao" class="box escondido">
-      <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
-      <h2>📍 Localização do Estabelecimento</h2>
-      <button onclick="pegarLocalizacao()">Obter Localização</button>
-      <p id="local"></p>
-    </div>
+<div id="localizacao" class="box escondido">
+  <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+  <h2>📍 Localização das Máquinas</h2>
+
+  <p style="opacity:.9; margin-top:0;">
+    Clique em uma máquina abaixo para ver o painel e abrir no Google Maps.
+  </p>
+
+  <h3 style="margin:10px 0 8px;">📋 Locais com GPS salvo</h3>
+  <ul id="listaLocais"></ul>
+
+  <div id="painelLocal" style="margin-top:12px;"></div>
+</div>
 
     <!-- HISTÓRICO DE VENDAS (AGORA NO LUGAR CERTO) -->
     <div class="box escondido" id="historicoVendas">
@@ -293,7 +333,8 @@
 
 
 <!-- Seu sistema -->
-<script type="module" src="script.js"></script>
+<script type="module" src="./script.js"></script>
+
 
 
 </body>

@@ -1,20 +1,145 @@
-body {
-    background: #0f172a;
-    color: #fff;
-    font-family: Arial;
-    text-align: center;
-    padding: 20px;
+/* =========================
+   ✅ BASE / RESET
+   ========================= */
+*{ box-sizing: border-box; }
+
+html, body{
+  width: 100%;
+  height: 100%;
+  margin: 0;
 }
 
-.menu {
+body{
+  background: #0f172a;
+  color: #fff;
+  font-family: Arial, sans-serif;
+  text-align: center;
+  padding: 12px;
+  min-height: 100vh;
+}
+
+/* =========================
+   ✅ CARD PRINCIPAL (telas)
+   ========================= */
+.box{
+  background: #1e293b;
+  border-radius: 16px;
+  padding: 20px;
+  width: 100%;
+  max-width: 520px;
+  margin: 14px auto;
+
+  position: relative;
+  padding-bottom: 110px; /* espaço do botão voltar fixo */
+}
+
+/* PC: tela cheia */
+@media (min-width: 900px){
+  body{ padding: 0; }
+
+  .box{
+    width: 100vw;
+    max-width: 100vw;
+    min-height: 100vh;
+    margin: 0;
+    border-radius: 0;
+
+    padding: 30px 80px;
+    padding-bottom: 150px; /* espaço do voltar */
+  }
+}
+
+/* =========================
+   ✅ MENU
+   ========================= */
+.menu{
   display: flex;
   flex-direction: column;
   gap: 12px;
   max-width: 320px;
-  margin: auto;
+  margin: 0 auto;
+}
+@media (min-width: 900px){
+  .menu{
+    max-width: 100%;
+    width: 100%;
+  }
 }
 
-/* ✅ Só os botões do MENU (maiores e top) */
+/* =========================
+   ✅ TIPOGRAFIA (TÍTULOS)
+   ========================= */
+#tituloApp,
+#tituloLogin{
+  font-size: 32px;
+  font-weight: 900;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin: 10px 0 6px;
+  color: #ff0000;
+  text-shadow:
+    0 0 12px rgba(255, 0, 0, 0.55),
+    0 0 24px rgba(0, 179, 255, 0.35);
+}
+
+#acessoLogin{
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  margin: 0 0 14px;
+  color: #fffb00;
+  text-transform: uppercase;
+  text-shadow: 0 0 15px rgba(255, 0, 0, 0.55);
+}
+
+#subtitulo,
+#subtituloLogin{
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  margin: 0 0 18px;
+  color: #fffb00;
+  text-transform: uppercase;
+  text-shadow: 0 0 15px rgba(255, 0, 0, 0.55);
+}
+
+/* =========================
+   ✅ FORM
+   ========================= */
+label{
+  display: block;
+  text-align: left;
+  margin-top: 12px;
+  font-size: 14px;
+}
+
+input, select, textarea{
+  width: 100%;
+  padding: 10px;
+  margin-top: 6px;
+  border-radius: 10px;
+  border: none;
+  outline: none;
+  font-size: 16px; /* evita zoom iPhone */
+}
+
+/* =========================
+   ✅ BOTÕES (PADRÃO)
+   ========================= */
+button{
+  width: 100%;
+  padding: 14px;
+  border: none;
+  border-radius: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  background: #38bdf8;
+  color: #0b1220;
+  font-size: 15px;
+  letter-spacing: 0.5px;
+}
+
+/* Botões do menu */
 .menu button{
   font-size: 15px;
   letter-spacing: 0.8px;
@@ -22,162 +147,113 @@ body {
   border-radius: 14px;
 }
 
-
-button {
-    padding: 14px;
-    border: none;
-    border-radius: 10px;
-    font-weight: bold;
-    cursor: pointer;
-    background: #38bdf8;
-
-    font-size: 15px;      /* ✅ aumenta o texto */
-    letter-spacing: 0.5px; /* ✅ deixa mais bonito */
+/* variações */
+.voltar{
+  background: #22c55e;
+  margin-bottom: 10px;
+  color: #0b1220;
+}
+.btn-danger{
+  background: #f87171;
+  color: #111;
+}
+.btn-danger:hover{
+  background: #ef4444;
 }
 
-.box{
-  background: #1e293b;
-  padding: 20px;
-  border-radius: 14px;
-
-  width: min(420px, 100%);
-  margin: 0 auto;
-
-  position: relative;
-  padding-bottom: 100px; /* por causa do botão voltar fixo */
-}
-
-
-label {
-    display: block;
-    text-align: left;
-    margin-top: 12px;
-    font-size: 14px;
-}
-
-input, select {
-    width: 100%;
-    padding: 8px;
-    margin-top: 4px;
-    border-radius: 6px;
-    border: none;
-}
-
-.voltar {
-    background: #22c55e;
-    margin-bottom: 10px;
-}
-
-.escondido {
-    display: none;
-}
-
-ul {
-    list-style: none;
-    padding: 0;
-}
-
-li {
-    background: #0f172a;
-    padding: 10px;
-    margin-top: 10px;
-    border-radius: 8px;
-}
-#resultado {
-    margin-top: 15px;
-    margin-bottom: 15px;
-    pointer-events: none;
-    position: relative;
-    z-index: 1;
-}
-
-button {
-    position: relative;
-    z-index: 10;
-}
-.box {
-    position: relative;
-}
-.linha-relogio{
-  display: flex;
-  gap: 25px;          /* AQUI separa os dois quadrados */
-  margin-top: 12px;
-}
-
-.campo-relogio{
-  flex: 1;
-}
-
-.campo-relogio label{
-  display: block;
-  margin-bottom: 8px; /* dá respiro entre o texto e o quadrado */
-}
-
-.campo-relogio input{
-  width: 100%;
-}
-
-/* VOLTAR SEMPRE EMBAIXO */
+/* =========================
+   ✅ VOLTAR FIXO EMBAIXO
+   ========================= */
 .btn-voltar{
   position: fixed !important;
   left: 50% !important;
   bottom: 18px !important;
   transform: translateX(-50%) !important;
 
-  width: min(420px, calc(100% - 40px)) !important;
+  width: min(520px, calc(100% - 24px)) !important;
   padding: 14px !important;
   border-radius: 12px !important;
 
   z-index: 9999 !important;
 }
-
-/* evita o conteúdo ficar escondido atrás do botão */
-.box{
-  padding-bottom: 100px;
-}
-.btn-danger{
-  background: #f87171;
-  color: #111;
+@media (min-width: 900px){
+  .btn-voltar{
+    width: calc(100vw - 160px) !important;
+  }
 }
 
-.btn-danger:hover{
-  background: #ef4444;
+/* =========================
+   ✅ LISTAS
+   ========================= */
+ul{
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+li{
+  background: #0f172a;
+  padding: 10px;
+  margin-top: 10px;
+  border-radius: 10px;
 }
 
+/* =========================
+   ✅ STATUS / PREVIEW
+   ========================= */
+#resultado{
+  margin-top: 15px;
+  margin-bottom: 15px;
+  pointer-events: none;
+  position: relative;
+  z-index: 1;
+}
 
-.acoes-telefone {
+/* =========================
+   ✅ LINHA RELÓGIO (2 CAMPOS)
+   ========================= */
+.linha-relogio{
+  display: flex;
+  gap: 25px;
+  margin-top: 12px;
+}
+.campo-relogio{ flex: 1; }
+.campo-relogio label{
+  display: block;
+  margin-bottom: 8px;
+}
+.campo-relogio input{ width: 100%; }
+
+/* =========================
+   ✅ AÇÕES TELEFONE
+   ========================= */
+.acoes-telefone{
   display: flex;
   gap: 10px;
   margin-top: 8px;
 }
-
-.acoes-telefone button {
+.acoes-telefone button{
   flex: 1;
   padding: 10px;
   border: none;
-  border-radius: 6px;
+  border-radius: 10px;
   cursor: pointer;
-  font-weight: bold;
+  font-weight: 800;
+  width: auto;
 }
-
-.acoes-telefone button:first-child {
+.acoes-telefone button:first-child{
   background: #1e90ff;
   color: #fff;
 }
-
-.acoes-telefone button:last-child {
+.acoes-telefone button:last-child{
   background: #25D366;
   color: #fff;
 }
 
+/* =========================
+   ✅ ALERTA OCORRÊNCIAS
+   ========================= */
+#btnOcorrencias{ position: relative; }
 
-
-
-#btnOcorrencias{
-  position: relative;
-}
-
-/* 2 bolinhas (esquerda e direita) */
 #btnOcorrencias.tem-alerta::before,
 #btnOcorrencias.tem-alerta::after{
   content:"";
@@ -189,139 +265,94 @@ button {
   border-radius: 50%;
   background:#ef4444;
   box-shadow: 0 0 0 3px rgba(15, 23, 42, .9);
-
-  animation: alertaPiscar 1s infinite; /* ✅ AQUI FAZ PISCAR */
+  animation: alertaPiscar 1s infinite;
 }
-
-/* esquerda */
-#btnOcorrencias.tem-alerta::before{
-  left: 45px;
-}
-
-/* direita */
-#btnOcorrencias.tem-alerta::after{
-  right: 45px;
-}
+#btnOcorrencias.tem-alerta::before{ left: 45px; }
+#btnOcorrencias.tem-alerta::after{ right: 45px; }
 
 @keyframes alertaPiscar{
   0%, 100% { opacity: 1; transform: translateY(-50%) scale(1); }
   50%      { opacity: .35; transform: translateY(-50%) scale(1.35); }
 }
 
+/* =========================
+   ✅ SENHA COM OLHO (DENTRO DO INPUT)
+   ✅ BATE COM SEU HTML: <div class="senha-wrapper">
+   ========================= */
 
-#subtitulo{
-  font-size: 20px;      /* aumenta */
-  font-weight: 800;     /* mais forte */
-  letter-spacing: 1px;  /* mais “top” */
-  margin-top: -6px;
-  margin-bottom: 18px;
 
-  color: #fffb00;       /* chamativo (mesma cor dos botões) */
-  text-transform: uppercase;
+
+
+/* ✅ SENHA + OLHO NA MESMA LINHA (lado direito do input) */
+#telaLogin .senha-wrapper{
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  width: 100% !important;
+}
+
+/* input ocupa o espaço todo */
+#telaLogin .senha-wrapper input{
+  flex: 1 !important;
+  min-width: 0 !important;
+}
+
+/* botão do olho NÃO pode virar barra */
+#telaLogin .senha-wrapper .btn-olho{
+  width: 46px !important;
+  height: 46px !important;
+  padding: 0 !important;
+
+  border: none !important;
+  border-radius: 12px !important;
+
+  display: grid !important;
+  place-items: center !important;
+
+  background: #38bdf8 !important;
+  color: #0b1220 !important;
+
+  cursor: pointer !important;
+
+  /* mata o button{ width:100% } */
+  flex: 0 0 auto !important;
 }
 
 
-#subtitulo{
-  text-shadow: 0 0 15px rgba(255, 0, 0, 0.55);
+/* ✅ OLHO DENTRO DO INPUT (CANTO DIREITO) - FINAL BOSS */
+#telaLogin .senha-wrapper{
+  position: relative !important;
+  width: 100% !important;
 }
 
-#tituloApp,
-#tituloLogin{
-  font-size: 32px;
-  font-weight: 900;
-  letter-spacing: 1.5px;
-  text-transform: uppercase;
-  margin: 10px 0 6px;
-
-  color: #ff0000;
-  text-shadow:
-    0 0 12px rgba(255, 0, 0, 0.55),
-    0 0 24px rgba(0, 179, 255, 0.35);
+/* input normal, com espaço pro botão */
+#telaLogin .senha-wrapper input{
+  width: 100% !important;
+  padding-right: 70px !important;  /* espaço pro 👁 */
+  margin-top: 6px !important;
 }
 
-#tituloApp,
-#tituloLogin{
-  font-size: 32px;
-  font-weight: 900;
-  letter-spacing: 1.5px;
-  text-transform: uppercase;
-  margin: 10px 0 6px;
+/* botão do olho: NÃO herda botão grandão, fica dentro do campo */
+#telaLogin .senha-wrapper .btn-olho{
+  all: unset !important;                 /* zera o button{width:100%} */
+  position: absolute !important;
+  right: 10px !important;
+  top: calc(50% + 3px) !important;       /* ajusta junto do margin do input */
+  transform: translateY(-50%) !important;
 
-  color: #ff0000;
-  text-shadow:
-    0 0 12px rgba(255, 0, 0, 0.55),
-    0 0 24px rgba(0, 179, 255, 0.35);
-}
+  width: 46px !important;
+  height: 38px !important;
+  border-radius: 12px !important;
 
+  display: grid !important;
+  place-items: center !important;
 
+  background: #38bdf8 !important;
+  color: #0b1220 !important;
+  cursor: pointer !important;
 
-/* subtítulo amarelo na tela de login */
-#subtituloLogin{
-  font-size: 20px;
-  font-weight: 900;
-  letter-spacing: 1px;
-  margin-top: 0;
-  margin-bottom: 18px;
-
-  color: #fffb00;
-  text-transform: uppercase;
-
-  text-shadow: 0 0 15px rgba(255, 0, 0, 0.55);
+  font-size: 16px !important;
+  line-height: 1 !important;
 }
 
 
-/* ===== TELA LOGIN: TÍTULO E ACESSO ===== */
-#tituloLogin{
-  font-size: 32px;
-  font-weight: 900;
-  letter-spacing: 1.5px;
-  text-transform: uppercase;
-  margin: 0 0 6px;
-
-  color: #ff0000; /* vermelho */
-  text-shadow:
-    0 0 12px rgba(255, 0, 0, 0.55),
-    0 0 24px rgba(0, 179, 255, 0.35);
-}
-
-#acessoLogin{
-  font-size: 20px;
-  font-weight: 900;
-  letter-spacing: 1px;
-  margin: 0 0 14px;
-
-  color: #fffb00; /* amarelo */
-  text-transform: uppercase;
-  text-shadow: 0 0 15px rgba(255, 0, 0, 0.55);
-}
-
-
-/* Mobile friendly */
-* { box-sizing: border-box; }
-
-body {
-  margin: 0;
-  padding: 12px;
-}
-
-.box, .container, .card, .tela {
-  width: 100%;
-  max-width: 520px;
-  margin: 0 auto;
-}
-
-input, select, button, textarea {
-  width: 100%;
-  font-size: 16px; /* evita zoom automático no iPhone */
-}
-
-@media (max-width: 480px) {
-  body { padding: 10px; }
-  h1, h2 { font-size: 20px; }
-  button { padding: 12px 14px; }
-}
-
-@media (max-width: 480px){
-  .box{ padding: 16px; padding-bottom: 100px; }
-  body{ padding: 10px; }
-}

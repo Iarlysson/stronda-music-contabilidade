@@ -10,22 +10,50 @@ import {
   onSnapshot
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
+
+
+import {
+  getAuth as fbGetAuth,
+  signInAnonymously
+} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+
+
+
 // ✅ COLOQUE AQUI SEU firebaseConfig do Firebase Console
 const firebaseConfig = {
-  apiKey: "...",
-  authDomain: "...",
-  projectId: "...",
-  storageBucket: "...",
-  messagingSenderId: "...",
-  appId: "..."
+  apiKey: "AIzaSyDwKkCtERVgvOsmEH1X_T1gqn66bDRHsYo",
+  authDomain: "stronda-music-controle.firebaseapp.com",
+  projectId: "stronda-music-controle",
+  storageBucket: "stronda-music-controle.firebasestorage.app",
+  messagingSenderId: "339385914034",
+  appId: "1:339385914034:web:601d747b7151d507ad6fab"
 };
 
 
 const appFirebase = initializeApp(firebaseConfig);
 const db = getFirestore(appFirebase);
+const auth = fbGetAuth(appFirebase);
+
+
+
+
 
 // ✅ UM ÚNICO DOC COM TODOS OS DADOS (mais simples)
 const docRef = doc(db, "stronda", "dados");
+
+async function garantirDocExiste() {
+  const snap = await getDoc(docRef);
+  if (!snap.exists()) {
+    await setDoc(docRef, {
+      atualizadoEm: new Date().toISOString(),
+      ocorrencias: [],
+      maquinas: [],
+      acertos: [],
+      usuarios: []
+    });
+  }
+}
+
 
 // estado do app (vai substituir localStorage)
 let ocorrencias = [];
@@ -33,57 +61,253 @@ let maquinas = [];
 let acertos = [];
 let usuarios = [];
 let sessaoUsuario = null;
+let firebasePronto = false;
 
 
-// trava pra não ficar salvando em loop
+// ==========================
+// 💳 CRÉDITOS REMOTOS (ADMIN)
+// ==========================
+
+// auto preencher estabelecimento ao digitar número da máquina
+function crAutoPorNumero() {
+  const numEl = document.getElementById("crNum");
+  const estabEl = document.getElementById("crEstab");
+  const info = document.getElementById("crInfo");
+
+  if (!numEl || !estabEl) return;
+
+  const num = (numEl.value || "").trim().toUpperCase();
+  numEl.value = num;
+
+  if (!num) {
+    estabEl.value = "";
+    if (info) info.textContent = "";
+    return;
+  }
+
+  const m = maquinas.find(x => String(x.numero || "").toUpperCase() === num);
+
+  if (!m) {
+    estabEl.value = "❌ MÁQUINA NÃO ENCONTRADA";
+    if (info) info.textContent = "";
+    return;
+  }
+
+  estabEl.value = String(m.estab || "").toUpperCase();
+
+  const ult = m.ultimoRelogio != null ? Number(m.ultimoRelogio) : 0;
+  if (info) info.innerHTML = `📌 Último relógio atual: <b>${ult.toFixed(2)}</b>`;
+}
+
+
+// =====================
+// ✅ STATUS DE ACERTOS
+// =====================
+function atualizarStatus() {
+  const listaStatus = document.getElementById("listaStatus");
+  if (!listaStatus) return;
+
+  listaStatus.innerHTML = "";
+
+  // se ainda não carregou do Firebase
+  if (!Array.isArray(maquinas)) {
+    listaStatus.innerHTML = "<li>⏳ Carregando máquinas...</li>";
+    return;
+  }
+
+  const agora = new Date();
+  const mesAtual = agora.getMonth();
+  const anoAtual = agora.getFullYear();
+
+  // ✅ só máquinas que NÃO são depósito
+  const ativas = (maquinas || []).filter(m => normalizarStatus(m.status) !== "DEPOSITO");
+
+  // ✅ 1 por estabelecimento
+  const unicos = new Map();
+  ativas.forEach(m => {
+    const key = String(m.estab || "").toUpperCase().trim();
+    if (!unicos.has(key)) unicos.set(key, m);
+  });
+
+  const lista = [...unicos.values()];
+
+  if (!lista.length) {
+    listaStatus.innerHTML = "<li>✅ Nenhuma máquina ALUGADA</li>";
+    return;
+  }
+
+  lista.forEach((m) => {
+    const estabKey = String(m.estab || "").toUpperCase().trim();
+
+    const teveAcerto = (acertos || []).some((a) => {
+      const d = new Date(a.data);
+      return (
+        String(a.estab || "").toUpperCase().trim() === estabKey &&
+        d.getMonth() === mesAtual &&
+        d.getFullYear() === anoAtual
+      );
+    });
+
+    const li = document.createElement("li");
+    li.style.cursor = "pointer";
+    li.textContent = `${teveAcerto ? "🟢" : "🔴"} ${estabKey} (JB Nº ${String(m.numero || "").toUpperCase()})`;
+
+    // abre detalhes do mês
+    li.onclick = () => {
+      if (typeof abrirDetalhesCliente === "function") abrirDetalhesCliente(m.estab);
+    };
+
+    listaStatus.appendChild(li);
+  });
+}
+
+
+
+// salvar crédito remoto: soma no relógio anterior (ultimoRelogio)
+function salvarCreditoRemoto() {
+  if (!exigirAdmin()) return;
+
+  const num = (document.getElementById("crNum")?.value || "").trim().toUpperCase();
+  const valor = Number(document.getElementById("crValor")?.value || 0);
+
+  if (!num) return alert("❌ Digite o número da máquina.");
+  if (!valor || valor <= 0) return alert("❌ Digite um valor válido (maior que 0).");
+
+  const m = maquinas.find(x => String(x.numero || "").toUpperCase() === num);
+  if (!m) return alert("❌ Máquina não encontrada.");
+
+  // relógio atual
+  const atual = m.ultimoRelogio != null ? Number(m.ultimoRelogio) : 0;
+  const novo = atual + valor;
+
+  // atualiza relógio
+  m.ultimoRelogio = novo;
+
+  // registra histórico (opcional, mas recomendado)
+  if (!Array.isArray(m.creditosRemotos)) m.creditosRemotos = [];
+
+  m.creditosRemotos.push({
+    id: Date.now(),
+    valor: valor,
+    antes: atual,
+    depois: novo,
+    data: new Date().toISOString(),
+  });
+
+  salvarNoFirebase();
+
+
+
+  alert(`✅ Crédito remoto lançado!\n\n${m.estab}\nJB Nº ${m.numero}\n\nRelógio: ${atual.toFixed(2)} → ${novo.toFixed(2)}`);
+
+  // limpar campos
+  const crNum = document.getElementById("crNum");
+  const crEstab = document.getElementById("crEstab");
+  const crValor = document.getElementById("crValor");
+  const crInfo = document.getElementById("crInfo");
+
+  if (crNum) crNum.value = "";
+  if (crEstab) crEstab.value = "";
+  if (crValor) crValor.value = "";
+  if (crInfo) crInfo.textContent = "";
+}
+
+
+function desabilitarBotaoLogin() {
+  const btn = document.getElementById("btnEntrar");
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = "⏳ Carregando...";
+  btn.style.opacity = "0.7";
+}
+
+function habilitarBotaoLogin() {
+  const btn = document.getElementById("btnEntrar");
+  if (!btn) return;
+  btn.disabled = false;
+  btn.textContent = "Entrar";
+  btn.style.opacity = "1";
+}
+
+desabilitarBotaoLogin();
+
+
+
 let carregandoDoFirebase = false;
+let saveTimer = null;
 
-async function salvarNoFirebase() {
+function salvarNoFirebase() {
+  if (!firebasePronto) return;
   if (carregandoDoFirebase) return;
 
-  const payload = {
-    atualizadoEm: new Date().toISOString(),
-    ocorrencias, maquinas, acertos, usuarios,
-  };
+  // ✅ junta vários saves em 1 (evita salvar em loop)
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    const payload = {
+      atualizadoEm: new Date().toISOString(),
+      ocorrencias, maquinas, acertos, usuarios,
+    };
 
-  try {
-    await setDoc(docRef, payload, { merge: true });
-  } catch (err) {
-    console.error("❌ Firebase save error:", err);
-    alert("❌ Não consegui salvar no Firebase.\n\n" + (err?.message || err));
-  }
-}
-
-
-function iniciarSincronizacaoFirebase() {
-  onSnapshot(
-    docRef,
-    (snap) => {
-      carregandoDoFirebase = true;
-
-      const data = snap.data() || {};
-      ocorrencias = Array.isArray(data.ocorrencias) ? data.ocorrencias : [];
-      maquinas    = Array.isArray(data.maquinas) ? data.maquinas : [];
-      acertos     = Array.isArray(data.acertos) ? data.acertos : [];
-      usuarios    = Array.isArray(data.usuarios) ? data.usuarios : [];
-
-      carregandoDoFirebase = false;
-
-      garantirAdminPadrao();
-
-      try { atualizarAlertaOcorrencias(); } catch {}
-      try { listarOcorrencias(); } catch {}
-      try { listarMaquinas(); } catch {}
-      try { atualizarStatus(); } catch {}
-      try { if (typeof listarLocaisSalvos === "function") listarLocaisSalvos(); } catch {}
-    },
-    (err) => {
-      carregandoDoFirebase = false;
-      console.error("❌ Firebase snapshot error:", err);
-      alert("❌ Firebase não conectou no celular.\n\n" + (err?.message || err));
+    try {
+      await setDoc(docRef, payload, { merge: true });
+    } catch (err) {
+      console.error("❌ Firebase save error:", err);
+      alert("❌ Não consegui salvar no Firebase.\n\n" + (err?.message || err));
     }
-  );
+  }, 300);
 }
+
+
+
+ 
+async function iniciarSincronizacaoFirebase() {
+  try {
+    await signInAnonymously(auth); // ✅ entra no Firebase sem pedir nada
+  } catch (e) {
+    console.error("❌ Auth anônimo falhou:", e);
+    alert("❌ Falha ao conectar no Firebase (Auth anônimo).");
+    return;
+  }
+
+  await garantirDocExiste();
+
+
+  onSnapshot(
+  docRef,
+  (snap) => {
+    carregandoDoFirebase = true;
+
+    const data = snap.data() || {};
+    ocorrencias = Array.isArray(data.ocorrencias) ? data.ocorrencias : [];
+    maquinas = Array.isArray(data.maquinas) ? data.maquinas : [];
+    maquinas = maquinas.map(normalizarGPSMaquina);
+
+    acertos  = Array.isArray(data.acertos) ? data.acertos : [];
+    usuarios = Array.isArray(data.usuarios) ? data.usuarios : [];
+
+    carregandoDoFirebase = false;
+
+    firebasePronto = true;
+    habilitarBotaoLogin();
+
+    garantirAdminPadrao();
+
+    try { atualizarAlertaOcorrencias(); } catch {}
+    try { listarOcorrencias(); } catch {}
+    try { listarMaquinas(); } catch {}
+    try { atualizarStatus(); } catch {}
+    try { if (typeof listarLocaisSalvos === "function") listarLocaisSalvos(); } catch {}
+  },
+  (err) => {
+    carregandoDoFirebase = false;
+    firebasePronto = false;
+    desabilitarBotaoLogin();
+    console.error("❌ Firebase snapshot error:", err);
+    alert("❌ Firebase não conectou.\n\n" + (err?.message || err));
+  }
+);
+
+} // ✅ FECHA iniciarSincronizacaoFirebase()
 
 
 
@@ -156,20 +380,30 @@ window.addEventListener("load", ativarMascaraTelefoneCampos);
 iniciarSincronizacaoFirebase();
 atualizarAlertaOcorrencias();
 
+let adminPadraoJaGarantido = false;
+
 function garantirAdminPadrao() {
-  const temAdmin = (usuarios || []).some(
-    (u) => String(u.tipo || "").toUpperCase() === "ADMIN"
+  if (adminPadraoJaGarantido) return;
+
+  const jaTemAdmin = (usuarios || []).some(u =>
+    String(u.tipo || "").toUpperCase() === "ADMIN" &&
+    String(u.user || "").toLowerCase() === "admin"
   );
-  if (temAdmin) return;
+
+  if (jaTemAdmin) {
+    adminPadraoJaGarantido = true;
+    return;
+  }
 
   usuarios.push({
-    id: Date.now(),
+    id: "ADMIN_PADRAO",         // ✅ ID FIXO (não duplica)
     tipo: "ADMIN",
     nome: "ADMIN",
     user: "admin",
     senha: "1234",
   });
 
+  adminPadraoJaGarantido = true;
   salvarNoFirebase();
 }
 
@@ -249,9 +483,48 @@ function mostrarApp() {
   if (app) app.classList.remove("escondido");
 }
 
+// =====================
+// 🔒 PERMISSÕES (ADMIN x COLAB)
+// =====================
+function aplicarPermissoesUI() {
+  const rAnt = document.getElementById("relogioAnterior");
+  if (!rAnt) return;
+
+  if (!isAdmin()) {
+    rAnt.disabled = true;
+    rAnt.style.opacity = "0.6";
+    rAnt.style.cursor = "not-allowed";
+    rAnt.title = "Somente ADMIN pode alterar o Relógio Anterior";
+
+    // se alguém tentar clicar mesmo assim
+    rAnt.addEventListener("click", () => {
+      alert("❌ Somente o ADMIN pode alterar o Relógio Anterior.");
+    });
+  } else {
+    rAnt.disabled = false;
+    rAnt.style.opacity = "1";
+    rAnt.style.cursor = "text";
+    rAnt.title = "";
+  }
+}
+
+
+
 function entrarLogin(tipo) {
+  if (!firebasePronto) {
+    return alert("⏳ Carregando do Firebase... aguarde 2 segundos e tente novamente.");
+  }
+
+  
+
+
+  // ✅ normaliza o tipo vindo do select
+  tipo = String(tipo || "").toUpperCase();
+  if (tipo.includes("ADMIN")) tipo = "ADMIN";
+  if (tipo.includes("COLAB")) tipo = "COLAB";
+
   const user = (document.getElementById("loginUser")?.value || "").trim().toLowerCase();
-  const senha = (document.getElementById("loginSenha")?.value || "").trim(); // ✅ agora bate com o HTML
+  const senha = (document.getElementById("loginSenha")?.value || "").trim();
 
   if (!user || !senha) return alert("❌ Preencha usuário e senha.");
 
@@ -265,8 +538,10 @@ function entrarLogin(tipo) {
 
   salvarSessao(u);
   mostrarApp();
+  aplicarPermissoesUI();
   atualizarAlertaOcorrencias();
 }
+
 
 
 window.addEventListener("load", () => {
@@ -296,16 +571,17 @@ function adicionarColaborador() {
 
   if (!nome || !user || !senha) return alert("❌ Preencha nome, usuário e senha.");
 
-  const existe = usuarios.some(x => String(x.user).toLowerCase() === user);
-  if (existe) return alert("⚠️ Já existe esse usuário.");
+  const whats = (document.getElementById("colabWhats")?.value || "").trim();
 
-  usuarios.push({
+usuarios.push({
   id: Date.now(),
   tipo: "COLAB",
   nome: nome,
   user: user,
-  senha: senha
+  senha: senha,
+  whats: whats // ✅ WhatsApp do colaborador
 });
+
 
   salvarNoFirebase();
 
@@ -316,6 +592,40 @@ function adicionarColaborador() {
   listarColaboradores();
   alert("✅ Colaborador criado!");
 }
+
+function normalizarWhats(valor) {
+  let n = String(valor || "").replace(/\D/g, "");
+  if (n.startsWith("55")) n = n.slice(2);      // remove 55 se tiver
+  if (n.length > 11) n = n.slice(0, 11);       // limita
+  return n.length >= 10 ? n : "";              // valida DDD + num
+}
+
+function listarColaboradoresComWhats() {
+  return (usuarios || [])
+    .filter(u => String(u.tipo || "").toUpperCase() === "COLAB")
+    .map(u => ({ ...u, whats: normalizarWhats(u.whats) }))
+    .filter(u => !!u.whats);
+}
+
+// abre Whats no celular/pc já com texto
+function abrirWhatsTexto(numero11, msg) {
+  const tel = normalizarWhats(numero11);
+  if (!tel) return false;
+
+  const url = `https://wa.me/55${tel}?text=${encodeURIComponent(msg)}`;
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+
+  return true;
+}
+
+
 
 function listarColaboradores() {
   if (!exigirAdmin()) return;
@@ -426,7 +736,7 @@ function normalizarStatus(s) {
 // ======================
 function abrir(id) {
   const menu = document.getElementById("menu");
-  const titulo = document.getElementById("titulo");
+  const titulo = document.getElementById("tituloApp");
   const subtitulo = document.getElementById("subtitulo");
 
   // esconde cabeçalho + menu
@@ -442,16 +752,17 @@ function abrir(id) {
   if (tela) tela.classList.remove("escondido");
 
   // atualizações específicas
-  if (id === "status") atualizarStatus();
-  if (id === "clientes") listarMaquinas();
-  if (id === "ocorrencias") listarOcorrencias();
-  if (id === "ocorrencias") atualizarAlertaOcorrencias();
-  if (id === "colaboradores") listarColaboradores();
+  if (id === "status") window.atualizarStatus?.();
+if (id === "clientes") window.listarMaquinas?.();
+if (id === "ocorrencias") window.listarOcorrencias?.();
+if (id === "colaboradores") window.listarColaboradores?.();
+
 
   if (id === "acerto") {
-    const r = document.getElementById("resultado");
-    if (r) r.innerHTML = "";
-    atualizarPreviewAcerto();
+  aplicarPermissoesUI(); // ✅ garante o bloqueio pro COLAB sempre
+  const r = document.getElementById("resultado");
+  if (r) r.innerHTML = "";
+  atualizarPreviewAcerto();
   }
 
   if (id === "localizacao") {
@@ -461,7 +772,7 @@ function abrir(id) {
 
 function voltar() {
   const menu = document.getElementById("menu");
-  const titulo = document.getElementById("titulo");
+  const titulo = document.getElementById("tituloApp");
   const subtitulo = document.getElementById("subtitulo");
 
   // esconde todas as telas internas
@@ -493,40 +804,46 @@ function salvarMaquina() {
   const enderecoTxt = ($("endereco")?.value || "").trim().toUpperCase();
   const porc = Number($("porcBase")?.value || 0);
   const fone = ($("foneCliente")?.value || "").trim();
-  const nums = fone.replace(/\D/g, ""); // só números
+
+  const nums = fone.replace(/\D/g, "").slice(0, 11);
   const ddd = nums.slice(0, 2);
-  const tel = nums.slice(2); // 8 ou 9 dígitos
-
-
+  const tel = nums.slice(2);
 
   if (!numero || !estab) {
     alert("❌ Preencha o número da jukebox e o estabelecimento");
     return;
   }
 
-  // impede número duplicado
   const numeroExiste = maquinas.some((m) => String(m.numero).toUpperCase() === numero);
   if (numeroExiste) {
     alert("⚠️ Essa jukebox já está cadastrada");
     return;
   }
 
+  // ✅ GPS capturado no botão "Pegar GPS" (Cadastro)
+  const lat = cadastroGeoTemp?.lat ?? null;
+  const lng = cadastroGeoTemp?.lng ?? null;
+
   maquinas.push({
-  numero,
-  estab,
-  cliente,
-  endereco: enderecoTxt,
-  porcBase: porc,
+    numero,
+    estab,
+    cliente,
+    endereco: enderecoTxt,
+    porcBase: porc,
 
-  ddd,
-  tel,
-  foneFormatado: formatarTelefoneBR(fone),
+    ddd,
+    tel,
+    foneFormatado: formatarTelefoneBR(fone),
 
-  resetStatusAt: null,
-});
+    // ✅ SALVA O GPS REAL NA MÁQUINA
+    lat,
+    lng,
 
+    resetStatusAt: null,
+  });
 
-
+  // ✅ depois de salvar limpa o GPS temporário
+  cadastroGeoTemp = null;
 
   salvarNoFirebase();
   alert("✅ Máquina cadastrada com sucesso");
@@ -632,63 +949,91 @@ function atualizarPreviewAcerto() {
   const dinV = Number($("dinheiro")?.value || 0);
   const perc = Number($("porcentagem")?.value || 0);
 
-  // total vem do relógio (se ambos preenchidos)
-  let total = 0;
-  let totalTxt = "";
+  const temRelogio = rAnt > 0 && rAtu > 0;
+  const totalRelogio = temRelogio ? arred2(rAtu - rAnt) : 0;
 
-  if ($("relogioAnterior") && $("relogioAtual") && rAnt > 0 && rAtu > 0) {
-    total = rAtu - rAnt;
-    totalTxt = `🕒 Total pelo relógio: R$ ${total.toFixed(2)}<br>`;
-  } else {
-    total = pixV + dinV;
-    totalTxt = `🧮 Total pelos valores: R$ ${total.toFixed(2)}<br>`;
+  const totalValores = arred2(pixV + dinV);
+
+  // Total usado no cálculo (se tem relógio, ele manda)
+  const total = temRelogio ? totalRelogio : totalValores;
+
+  if (total < 0) {
+    resultado.innerHTML = `❌ Relógio Atual não pode ser menor que Relógio Anterior.`;
+    return;
   }
 
-  if (total < 0) total = 0;
+  const clienteV = arred2(total * (perc / 100));
+  const empresaV = arred2(total - clienteV);
 
-  const clienteV = total * (perc / 100);
-  const empresaV = total - clienteV;
-
-  // quanto a empresa ainda precisa receber em espécie (pix já entrou na empresa)
-  const diff = empresaV - pixV;
+  const diff = arred2(empresaV - pixV);
   let saidaTexto = "";
+  if (diff > 0) saidaTexto = `💰 Valor em espécie a recolher: R$ ${diff.toFixed(2)}`;
+  else if (diff < 0) saidaTexto = `💸 Repassar ao cliente: R$ ${Math.abs(diff).toFixed(2)}`;
+  else saidaTexto = `✅ Nada a recolher/repassar`;
 
-  if (diff > 0) {
-    saidaTexto = `💰 Valor em espécie a recolher: R$ ${diff.toFixed(2)}`;
-  } else if (diff < 0) {
-    saidaTexto = `💸 Repassar ao cliente: R$ ${Math.abs(diff).toFixed(2)}`;
-  } else {
-    saidaTexto = `✅ Nada a recolher/repassar`;
+  // ✅ Validação: relógio tem que bater com pix+dinheiro (quando relógio preenchido)
+  let aviso = "";
+  if (temRelogio) {
+    const ok = Math.abs(arred2(totalRelogio - totalValores)) <= 0.01; // tolerância 1 centavo
+    if (!ok) {
+      aviso = `
+        <div style="margin-top:10px; padding:10px; border-radius:10px; background:#7f1d1d; color:#fff;">
+          ❌ <b>Cálculo errado!</b><br>
+          Relógio (R$ ${totalRelogio.toFixed(2)}) não bate com PIX+Dinheiro (R$ ${totalValores.toFixed(2)}).<br>
+          Ajuste PIX/Dinheiro antes de salvar.
+        </div>
+      `;
+    } else {
+      aviso = `
+        <div style="margin-top:10px; padding:10px; border-radius:10px; background:#14532d; color:#fff;">
+          ✅ Valores conferem: Relógio = PIX + Dinheiro
+        </div>
+      `;
+    }
   }
 
   resultado.innerHTML = `
     <strong>📊 Resultado do Acerto</strong><br><br>
-    ${totalTxt}
-    🧾 Valor da empresa: R$ ${empresaV.toFixed(2)}<br>
+
+    ${temRelogio
+      ? `🕒 Total pelo relógio: R$ ${totalRelogio.toFixed(2)}<br>`
+      : `🧮 Total pelos valores: R$ ${totalValores.toFixed(2)}<br>`}
+
+    💳 PIX: R$ ${pixV.toFixed(2)} | 💵 Dinheiro: R$ ${dinV.toFixed(2)}<br><br>
+
+    🏢 Valor da empresa: R$ ${empresaV.toFixed(2)}<br>
     👤 Comissão do cliente: R$ ${clienteV.toFixed(2)}<br><br>
-    ${saidaTexto}<br><br>
+
+    ${saidaTexto}<br>
     ✅ PIX já foi direto para a empresa
+
+    ${aviso}
   `;
 }
 
 /* ===== SALVAR ACERTO ===== */
 function salvarAcerto() {
   const maquina = acharMaquinaPorCampos();
+
   if (!maquina) {
     alert("❌ Máquina não encontrada (confira número ou estabelecimento)");
     return;
   }
 
-  const rAntEl = $("relogioAnterior");
-  const rAtuEl = $("relogioAtual");
-
-  const rAnt = Number(rAntEl?.value || 0);
-  const rAtu = Number(rAtuEl?.value || 0);
+  const rAntEl = document.getElementById("relogioAnterior");
+  const rAtuEl = document.getElementById("relogioAtual");
 
   if (!rAntEl || !rAtuEl) {
     alert("❌ Falta os campos de Relógio no HTML");
     return;
   }
+
+  if (!isAdmin()) {
+    rAntEl.value = maquina.ultimoRelogio != null ? String(maquina.ultimoRelogio) : "";
+  }
+
+  const rAnt = Number(rAntEl.value || 0);
+  const rAtu = Number(rAtuEl.value || 0);
 
   if (!rAnt || !rAtu) {
     alert("❌ Preencha Relógio Anterior e Relógio Atual");
@@ -700,14 +1045,39 @@ function salvarAcerto() {
     return;
   }
 
-  const totalRelogio = rAtu - rAnt;
+  // ✅ AQUI É O LOCAL CERTO (OBRIGAR PREENCHER PIX/DINHEIRO)
+  const pixEl = document.getElementById("pix");
+  const dinEl = document.getElementById("dinheiro");
 
-  const pixV = Number($("pix").value || 0);
-  const dinV = Number($("dinheiro").value || 0);
-  const perc = Number($("porcentagem").value || 0);
+  if (!pixEl || !dinEl) return alert("❌ Campos PIX/Dinheiro não encontrados.");
 
-  const total = totalRelogio; // ✅ relógio manda no total
+  if (pixEl.value.trim() === "" || dinEl.value.trim() === "") {
+    alert("❌ Preencha PIX e Dinheiro (use 0 se não tiver).");
+    return;
+  }
 
+  // ✅ agora pode ler valores
+  const totalRelogio = arred2(rAtu - rAnt);
+
+  const pixV = Number(pixEl.value || 0);
+  const dinV = Number(dinEl.value || 0);
+  const perc = Number(document.getElementById("porcentagem")?.value || 0);
+
+  // ✅ TRAVA: relógio precisa bater com PIX + Dinheiro
+  const somaValores = arred2(pixV + dinV);
+  const bateu = Math.abs(arred2(totalRelogio - somaValores)) <= 0.01;
+
+  if (!bateu) {
+    alert(
+      "❌ Cálculo errado!\n\n" +
+      `Relógio (Atual - Anterior) = R$ ${totalRelogio.toFixed(2)}\n` +
+      `PIX + Dinheiro = R$ ${somaValores.toFixed(2)}\n\n` +
+      "Ajuste PIX/Dinheiro para bater com o relógio.\nNão foi salvo."
+    );
+    return;
+  }
+
+  const total = totalRelogio;
   const clienteV = total * (perc / 100);
   const empresaV = total - clienteV;
 
@@ -715,7 +1085,6 @@ function salvarAcerto() {
   const especieRecolher = diff > 0 ? diff : 0;
   const repassarCliente = diff < 0 ? Math.abs(diff) : 0;
 
-  // salva histórico do acerto
   acertos.push({
     numero: maquina.numero,
     estab: maquina.estab,
@@ -732,74 +1101,23 @@ function salvarAcerto() {
     data: new Date().toISOString(),
   });
 
-  salvarNoFirebase();
-
-  // ✅ atualiza o "último relógio" da máquina para o próximo acerto
   maquina.ultimoRelogio = rAtu;
+
   salvarNoFirebase();
 
   alert("✅ Acerto salvo com sucesso");
 
-  // limpa tudo e volta pro menu
-  $("numAcerto").value = "";
-  $("estabAcerto").value = "";
-  $("relogioAnterior").value = "";
-  $("relogioAtual").value = "";
-  $("pix").value = "";
-  $("dinheiro").value = "";
-  $("porcentagem").value = "";
-  if ($("resultado")) $("resultado").innerHTML = "";
+  document.getElementById("numAcerto").value = "";
+  document.getElementById("estabAcerto").value = "";
+  document.getElementById("relogioAnterior").value = "";
+  document.getElementById("relogioAtual").value = "";
+  pixEl.value = "";
+  dinEl.value = "";
+  document.getElementById("porcentagem").value = "";
+  const res = document.getElementById("resultado");
+  if (res) res.innerHTML = "";
 
   voltar();
-}
-
-/* ======================
-   STATUS
-====================== */
-function atualizarStatus() {
-  const listaStatus = document.getElementById("listaStatus");
-  if (!listaStatus) return;
-
-  listaStatus.innerHTML = "";
-
-  const agora = new Date();
-  const mesAtual = agora.getMonth();
-  const anoAtual = agora.getFullYear();
-
-  // ✅ só máquinas ALUGADAS (DEPÓSITO some do Status)
-  const ativas = maquinas.filter(m => normalizarStatus(m.status) !== "DEPOSITO");
-
-  // ✅ 1 por estabelecimento
-  const unicos = new Map();
-  ativas.forEach((m) => {
-    const key = String(m.estab || "").toUpperCase().trim();
-    if (!unicos.has(key)) unicos.set(key, m);
-  });
-
-  const lista = [...unicos.values()];
-  if (!lista.length) {
-    listaStatus.innerHTML = "<li>✅ Nenhuma máquina ALUGADA</li>";
-    return;
-  }
-
-  lista.forEach((m) => {
-    const teveAcerto = acertos.some((a) => {
-      const d = new Date(a.data);
-      return (
-        String(a.estab || "").toUpperCase().trim() === String(m.estab || "").toUpperCase().trim() &&
-        d.getMonth() === mesAtual &&
-        d.getFullYear() === anoAtual
-      );
-    });
-
-    const li = document.createElement("li");
-    li.textContent =
-  `${teveAcerto ? "🟢" : "🔴"} ${String(m.estab || "").toUpperCase()} (Nº ${String(m.numero || "").toUpperCase()})`;
-    li.style.cursor = "pointer";
-    li.onclick = () => abrirDetalhesCliente(m.estab);
-
-    listaStatus.appendChild(li);
-  });
 }
 
 
@@ -907,7 +1225,9 @@ async function apagarMaquinaAdmin() {
   // ... resto do seu apagarMaquina continua igual ...
 }
 
-
+function arred2(n) {
+  return Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+}
 
 
 // ====== LISTA DE MÁQUINAS ======
@@ -1056,6 +1376,13 @@ function salvarAlteracoesMaquina() {
   const m = maquinas.find(x => x.numero == maquinaSelecionadaNumero);
   if (!m) return alert("Máquina não encontrada");
 
+  // ✅ pega os inputs aqui dentro (escopo correto)
+  const detEstab = document.getElementById("detEstab");
+  const detCliente = document.getElementById("detCliente");
+  const detEndereco = document.getElementById("detEndereco");
+  const detStatus = document.getElementById("detStatus");
+  const detFone = document.getElementById("detFone");
+
   const estabAntigo   = (m.estab || "").toUpperCase().trim();
   const clienteAntigo = (m.cliente || "").toUpperCase().trim();
 
@@ -1066,7 +1393,6 @@ function salvarAlteracoesMaquina() {
 
   if (!estabNovo) return alert("❌ O estabelecimento não pode ficar vazio");
 
-  // impede duplicar estabelecimento em outra máquina
   const duplicado = maquinas.some(x =>
     x.numero != m.numero && String(x.estab || "").toUpperCase().trim() === estabNovo
   );
@@ -1078,34 +1404,27 @@ function salvarAlteracoesMaquina() {
   m.endereco = enderecoNovo;
   m.status = statusNovo;
 
-  // ✅ TELEFONE: salva SEMPRE (mesmo que não mude estab/cliente)
-  const detFone = document.getElementById("detFone");
+  // ✅ TELEFONE
   const foneDigitado = (detFone?.value || "").trim();
-  const nums = foneDigitado.replace(/\D/g, "").slice(0, 11); // 2 DDD + 9 tel
+  const nums = foneDigitado.replace(/\D/g, "").slice(0, 11);
 
   m.ddd = nums.slice(0, 2);
   m.tel = nums.slice(2);
   m.foneFormatado = formatarTelefoneBR(nums);
 
-  // (se você quiser apagar acertos quando mudar estab/cliente, mantém)
+  // (se quiser apagar acertos quando muda estab/cliente)
   if (estabAntigo !== estabNovo || clienteAntigo !== clienteNovo) {
     acertos = acertos.filter(a =>
       String(a.estab || "").toUpperCase().trim() !== estabAntigo
     );
-    salvarNoFirebase();
   }
 
-  // ✅ salva máquinas
   salvarNoFirebase();
 
   alert("✅ Alterações salvas!");
 
-  // atualiza título
   const titulo = document.getElementById("tituloMaquina");
   if (titulo) titulo.textContent = `🔧 ${m.estab} (JB Nº ${m.numero})`;
-
-  // se quiser, volta pra lista
-  // voltar();
 }
 
 
@@ -1187,9 +1506,44 @@ function textoGeo(lat, lng) {
 }
 
 function abrirNoMaps(lat, lng) {
-  const url = `https://www.google.com/maps?q=${lat},${lng}`;
-  window.open(url, "_blank");
+  const la = toNumberCoord(lat);
+  const ln = toNumberCoord(lng);
+
+  if (la === null || ln === null) {
+    alert("❌ GPS inválido/ausente nessa máquina.");
+    return;
+  }
+
+  const url = `https://www.google.com/maps?q=${la},${ln}`;
+
+  // ✅ método mais compatível com celular: cria link e clica
+  const a = document.createElement("a");
+  a.href = url;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+
+  // fallback (se bloquear nova aba)
+  setTimeout(() => {
+    window.location.href = url;
+  }, 300);
 }
+
+
+function debugFirebase() {
+  console.log("firebasePronto:", firebasePronto);
+  console.log("maquinas.length:", (maquinas || []).length);
+  console.log("usuarios.length:", (usuarios || []).length);
+  console.log("acertos.length:", (acertos || []).length);
+  console.log("ocorrencias.length:", (ocorrencias || []).length);
+  alert(`FirebasePronto: ${firebasePronto}\nMáquinas: ${(maquinas||[]).length}\nUsuários: ${(usuarios||[]).length}`);
+}
+window.debugFirebase = debugFirebase;
+
+
+
 
 function pegarGPS() {
   return new Promise((resolve, reject) => {
@@ -1202,6 +1556,56 @@ function pegarGPS() {
     );
   });
 }
+
+function toNumberCoord(v) {
+  if (v === null || v === undefined) return null;
+
+  // se vier como string com vírgula, troca pra ponto
+  const s = String(v).trim().replace(",", ".");
+  const n = Number(s);
+
+  return Number.isFinite(n) ? n : null;
+}
+
+function extrairCoordsDoTexto(txt) {
+  const s = String(txt || "").toUpperCase();
+
+  // pega números com ponto OU vírgula (ex: -15.123 ou -15,123)
+  const mLat = s.match(/LAT\s*:\s*(-?\d+(?:[.,]\d+)?)/);
+  const mLng = s.match(/LNG\s*:\s*(-?\d+(?:[.,]\d+)?)/);
+
+  const lat = mLat ? toNumberCoord(mLat[1]) : null;
+  const lng = mLng ? toNumberCoord(mLng[1]) : null;
+
+  if (lat === null || lng === null) return null;
+  return { lat, lng };
+}
+
+// deixa a máquina com lat/lng SEMPRE coerentes
+function normalizarGPSMaquina(m) {
+  if (!m) return m;
+
+  // tenta usar lat/lng atuais
+  let lat = toNumberCoord(m.lat);
+  let lng = toNumberCoord(m.lng);
+
+  // se não tiver, tenta extrair do endereço (LAT: ... LNG: ...)
+  if (lat === null || lng === null) {
+    const coords = extrairCoordsDoTexto(m.endereco || "");
+    if (coords) {
+      lat = coords.lat;
+      lng = coords.lng;
+    }
+  }
+
+  // aplica de volta já corrigido
+  m.lat = lat;
+  m.lng = lng;
+
+  return m;
+}
+
+
 
 // --- CADASTRO: pega GPS e guarda pro salvarMaquina ---
 async function pegarLocalizacaoCadastro() {
@@ -1362,9 +1766,10 @@ function mostrarPainelLocal(m) {
       Lat: ${Number(m.lat).toFixed(6)}<br>
       Lng: ${Number(m.lng).toFixed(6)}<br><br>
 
-      <button type="button" onclick="abrirNoMaps(${Number(m.lat)}, ${Number(m.lng)})">
-        📍 Abrir no Google Maps
-      </button>
+      <button type="button" onclick="abrirNoMaps('${m.lat}', '${m.lng}')">
+  📍 Abrir no Google Maps
+</button>
+
     </div>
   `;
 }
@@ -1437,6 +1842,16 @@ function salvarOcorrencia() {
 
   salvarNoFirebase();
 
+    const msg =
+`🚨 NOVA OCORRÊNCIA
+🏢 ${estab}
+🎰 JB Nº ${num}
+📝 ${obs}
+🕒 ${new Date().toLocaleString("pt-BR")}`;
+
+  avisarTodosColaboradores(msg);
+
+
   document.getElementById("ocNum").value = "";
   document.getElementById("ocEstab").value = "";
   document.getElementById("ocObs").value = "";
@@ -1464,51 +1879,87 @@ function listarOcorrencias() {
     const li = document.createElement("li");
 
     // pega a máquina pelo número da ocorrência
-const m = maquinas.find(x =>
-  String(x.numero).toUpperCase() === String(o.numero).toUpperCase()
-);
+    const m = maquinas.find(x =>
+      String(x.numero).toUpperCase() === String(o.numero).toUpperCase()
+    );
 
-const temGPS = m && m.lat != null && m.lng != null;
+    // lat/lng seguros
+    const lat = m ? toNumberCoord(m.lat) : null;
+    const lng = m ? toNumberCoord(m.lng) : null;
+    const temGPS = (lat !== null && lng !== null);
 
-let btnLocal = "";
-if (temGPS) {
-  btnLocal = `
-    <button type="button"
-      style="margin-top:10px; background:#38bdf8;"
-      onclick="abrirNoMaps(${Number(m.lat)}, ${Number(m.lng)})">
-      📍 Abrir Localização
-    </button>
-  `;
-} else {
-  btnLocal = `
-    <button type="button"
-      style="margin-top:10px; background:#38bdf8;"
-      onclick="alert('❌ Essa máquina ainda não tem GPS salvo. Vá em Cadastro/Máquinas e pegue o GPS.')">
-      📍 Abrir Localização
-    </button>
-  `;
-}
-
+    // botão localização (✅ agora correto)
+    const btnLocal = temGPS
+      ? `
+        <button type="button"
+          style="
+            margin-top:10px;
+            width:100%;
+            padding:14px 12px;
+            border:none;
+            border-radius:12px;
+            background:#38bdf8;
+            color:#0b1220;
+            font-weight:800;
+            font-size:16px;
+            line-height:1;
+            text-align:center;
+          "
+          onclick="abrirNoMaps('${lat}', '${lng}')">
+          📍 Abrir Localização
+        </button>
+      `
+      : `
+        <button type="button"
+          style="
+            margin-top:10px;
+            width:100%;
+            padding:14px 12px;
+            border:none;
+            border-radius:12px;
+            background:#38bdf8;
+            color:#0b1220;
+            font-weight:800;
+            font-size:16px;
+            line-height:1;
+            text-align:center;
+          "
+          onclick="alert('❌ Essa máquina ainda não tem GPS salvo. Vá em Máquinas Cadastradas e clique em Buscar Localização (GPS).')">
+          📍 Abrir Localização
+        </button>
+      `;
 
     li.style.padding = "12px";
     li.style.borderRadius = "10px";
     li.style.background = "#0f172a";
     li.style.marginTop = "10px";
+
     li.innerHTML = `
-  <b>${o.estab}</b> — JB Nº <b>${o.numero}</b><br>
-  <span style="opacity:.85;">${d.toLocaleDateString()} ${d.toLocaleTimeString()}</span><br><br>
-  <div style="white-space:pre-wrap; opacity:.95;">${o.obs}</div>
-  <br>
+      <b>${o.estab}</b> — JB Nº <b>${o.numero}</b><br>
+      <span style="opacity:.85;">${d.toLocaleDateString()} ${d.toLocaleTimeString()}</span><br><br>
+      <div style="white-space:pre-wrap; opacity:.95;">${o.obs}</div>
+      <br>
 
-  ${btnLocal}
+      ${btnLocal}
 
-  <button type="button" style="margin-top:10px; background:#22c55e;"
-    onclick="concluirOcorrencia(${o.id})">
-    ✅ Concluído
-  </button>
-`;
-
-
+      <button type="button"
+        style="
+          margin-top:10px;
+          width:100%;
+          padding:14px 12px;
+          border:none;
+          border-radius:12px;
+          background:#22c55e;
+          color:#0b1220;
+          font-weight:800;
+          font-size:16px;
+          line-height:1;
+          text-align:center;
+        "
+        onclick="concluirOcorrencia(${o.id})">
+        ✅ Concluído
+      </button>
+    `;
 
     ul.appendChild(li);
   });
@@ -1526,15 +1977,7 @@ function concluirOcorrencia(id) {
 }
 
 async function apagarMaquina() {
-  const senha = await pedirSenhaAdmin();
-  if (senha === null) return;
-
-  const senhaCorreta = getAdminSenha();
-
-  if (senha !== senhaCorreta) {
-    alert("❌ Senha incorreta. Apenas o ADMIN pode apagar.");
-    return;
-  }
+  if (!exigirAdmin()) return; // ✅ só isso, sem pedir senha
 
   const numero = (document.getElementById("detNumero")?.value || "").trim().toUpperCase();
   if (!numero) return alert("❌ Selecione uma máquina para apagar.");
@@ -1547,16 +1990,12 @@ async function apagarMaquina() {
   const ok = confirm(`Apagar ${m.estab} (JB Nº ${m.numero})?\nIsso apaga os acertos também.`);
   if (!ok) return;
 
-  // remove a máquina
   maquinas.splice(idx, 1);
 
-  // remove acertos do estab
   const estabKey = String(m.estab || "").toUpperCase().trim();
-  const filtrados = acertos.filter(a => String(a.estab || "").toUpperCase().trim() !== estabKey);
-  acertos.splice(0, acertos.length, ...filtrados);
+  acertos = acertos.filter(a => String(a.estab || "").toUpperCase().trim() !== estabKey);
 
   salvarNoFirebase();
-  
   atualizarAlertaOcorrencias();
 
   alert("🗑 Máquina apagada com sucesso!");
@@ -1567,19 +2006,15 @@ async function apagarMaquina() {
   voltar();
 }
 
-async function abrirHistoricoVendas() {
-  const cred = await pedirCredenciaisAdmin();
-  if (cred === null) return;
 
-  if (!validarCredenciaisAdmin(cred)) {
-    alert("❌ Usuário ou senha incorretos. Apenas o ADMIN pode entrar no Histórico.");
-    return;
-  }
+async function abrirHistoricoVendas() {
+  if (!exigirAdmin()) return; // ✅ sem pedir senha extra
 
   abrir("historicoVendas");
 
   const ini = document.getElementById("hvInicio");
   const fim = document.getElementById("hvFim");
+
   if (ini && fim && !ini.value && !fim.value) {
     const hoje = new Date();
     const d7 = new Date();
@@ -1797,6 +2232,7 @@ function limparHistoricoVendas() {
 // =====================
 
 // Botão "Entrar" do login chama fazerLogin()
+
 function fazerLogin() {
   // pega o tipo do select (pode estar "Administrador", "ADMIN", etc.)
   let tipo = (document.getElementById("tipoLogin")?.value || "ADMIN").toString().toUpperCase();
@@ -1862,6 +2298,32 @@ function abrirWhats() {
   if (!numero) return alert("❌ Informe um telefone válido no campo do detalhe.");
   window.open("https://wa.me/55" + numero, "_blank");
 }
+
+
+function avisarTodosColaboradores(msg) {
+  const lista = listarColaboradoresComWhats();
+
+  if (!lista.length) {
+    alert("❌ Nenhum colaborador com Whats válido cadastrado.");
+    return;
+  }
+
+  let i = 0;
+
+  const abrirProximo = () => {
+    if (i >= lista.length) {
+      alert("✅ Abri o WhatsApp para todos os colaboradores.\nAgora é só enviar em cada conversa.");
+      return;
+    }
+
+    const c = lista[i++];
+    const ok = abrirWhatsTexto(c.whats, msg);
+    if (!ok) abrirProximo();
+  };
+
+  abrirProximo();
+}
+
 
 // deixa global pro onclick do HTML enxergar
 window.ligarTelefone = ligarTelefone;
@@ -1963,13 +2425,8 @@ function validarCredenciaisAdmin({ user, senha }) {
 
 
 async function trocarSenhaAdmin() {
-  const cred = await pedirCredenciaisAdmin();
-  if (cred === null) return;
-
-  if (!validarCredenciaisAdmin(cred)) {
-    alert("❌ Usuário ou senha incorretos.");
-    return;
-  }
+  window.trocarSenhaAdmin = trocarSenhaAdmin;
+  if (!exigirAdmin()) return; // ✅ pronto, sem pedir senha
 
   const nova = prompt("Digite a NOVA senha do ADMIN (mínimo 4 caracteres):");
   if (nova === null) return;
@@ -1985,13 +2442,7 @@ async function trocarSenhaAdmin() {
     return;
   }
 
-  // atualiza o usuário ADMIN no array usuarios
-  const userLower = String(cred.user || "").trim().toLowerCase();
-  const admin = (usuarios || []).find(x =>
-    String(x.tipo).toUpperCase() === "ADMIN" &&
-    String(x.user).toLowerCase() === userLower
-  );
-
+  const admin = (usuarios || []).find(u => String(u.tipo || "").toUpperCase() === "ADMIN");
   if (!admin) return alert("❌ Admin não encontrado.");
 
   admin.senha = novaLimpa;
@@ -2000,31 +2451,16 @@ async function trocarSenhaAdmin() {
   alert("✅ Senha do ADMIN alterada com sucesso!");
 }
 
-window.trocarSenhaAdmin = trocarSenhaAdmin;
-
 
 async function trocarCredenciaisAdmin() {
-  // confirma admin atual
-  const cred = await pedirCredenciaisAdmin();
-  if (cred === null) return;
-
-  if (!validarCredenciaisAdmin(cred)) {
-    alert("❌ Usuário ou senha atuais incorretos.");
-    return;
-  }
+  window.trocarCredenciaisAdmin = trocarCredenciaisAdmin;
+  if (!exigirAdmin()) return; // ✅ sem pedir senha extra
 
   const novoUser = prompt("Digite o NOVO usuário do ADMIN (ex: admin2):");
   if (novoUser === null) return;
 
   const novoUserLimpo = String(novoUser).trim().toLowerCase();
   if (!novoUserLimpo) return alert("❌ Usuário não pode ficar vazio.");
-
-  // impede duplicar com outro usuário existente
-  const jaExiste = (usuarios || []).some(u =>
-    String(u.user || "").toLowerCase() === novoUserLimpo &&
-    String(u.tipo || "").toUpperCase() !== "ADMIN"
-  );
-  if (jaExiste) return alert("⚠️ Já existe outro usuário com esse login.");
 
   const novaSenha = prompt("Digite a NOVA senha do ADMIN (mínimo 4 caracteres):");
   if (novaSenha === null) return;
@@ -2040,44 +2476,22 @@ async function trocarCredenciaisAdmin() {
     return;
   }
 
-  // acha o admin atual e atualiza user+senha
-  const admin = (usuarios || []).find(u =>
-    String(u.tipo || "").toUpperCase() === "ADMIN" &&
-    String(u.user || "").toLowerCase() === String(cred.user || "").toLowerCase()
-  );
-
+  const admin = (usuarios || []).find(u => String(u.tipo || "").toUpperCase() === "ADMIN");
   if (!admin) return alert("❌ Admin não encontrado.");
 
   admin.user = novoUserLimpo;
-  admin.nome = "ADMIN"; // mantém nome padrão (se quiser mudar também, eu faço)
   admin.senha = novaSenhaLimpa;
 
   salvarNoFirebase();
 
-  // se estiver logado, atualiza sessão em memória também
-  if (typeof sessaoUsuario !== "undefined" && sessaoUsuario) {
-    sessaoUsuario.user = novoUserLimpo;
-  }
-
-  alert("✅ Usuário e senha do ADMIN foram alterados com sucesso!\n\nAgora faça login com o novo usuário.");
+  alert("✅ Usuário e senha do ADMIN alterados!");
 }
 
-window.trocarCredenciaisAdmin = trocarCredenciaisAdmin;
-
-
 function exportarDados() {
-  // (opcional) se quiser admin-only:
-  // if (!exigirAdmin()) return;
-
   const payload = {
     versao: 1,
     exportadoEm: new Date().toISOString(),
-    dados: {
-      usuarios: JSON.parse(localStorage.getItem("usuarios") || "[]"),
-      maquinas: JSON.parse(localStorage.getItem("maquinas") || "[]"),
-      acertos: JSON.parse(localStorage.getItem("acertos") || "[]"),
-      ocorrencias: JSON.parse(localStorage.getItem("ocorrencias") || "[]"),
-    }
+    dados: { usuarios, maquinas, acertos, ocorrencias }
   };
 
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -2094,48 +2508,40 @@ function exportarDados() {
   alert("✅ Backup exportado!");
 }
 
+
+function toggleSenha(id, btn){
+  const input = document.getElementById(id);
+  if (!input) return;
+
+  const mostrando = input.type === "text";
+  input.type = mostrando ? "password" : "text";
+  btn.textContent = mostrando ? "👁️" : "🙈";
+}
+
+window.toggleSenha = toggleSenha;
+
+
 function importarDadosArquivo(event) {
   const file = event.target.files?.[0];
   if (!file) return;
 
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
     try {
       const obj = JSON.parse(String(reader.result || "{}"));
-      const dados = obj?.dados || obj; // aceita tanto {dados:{...}} quanto {...}
+      const dados = obj?.dados || obj;
 
-      if (!dados) throw new Error("Arquivo inválido.");
+      if (Array.isArray(dados.usuarios)) usuarios = dados.usuarios;
+      if (Array.isArray(dados.maquinas)) maquinas = dados.maquinas;
+      if (Array.isArray(dados.acertos)) acertos = dados.acertos;
+      if (Array.isArray(dados.ocorrencias)) ocorrencias = dados.ocorrencias;
 
-      // valida mínimo
-      const maquinasImp = Array.isArray(dados.maquinas) ? dados.maquinas : null;
-      const ocorrImp = Array.isArray(dados.ocorrencias) ? dados.ocorrencias : null;
-      const acertosImp = Array.isArray(dados.acertos) ? dados.acertos : null;
-      const usuariosImp = Array.isArray(dados.usuarios) ? dados.usuarios : null;
-
-      if (!maquinasImp && !ocorrImp && !acertosImp && !usuariosImp) {
-        throw new Error("Backup sem dados reconhecidos.");
-      }
-
-      if (usuariosImp) localStorage.setItem("usuarios", JSON.stringify(usuariosImp));
-      if (maquinasImp) localStorage.setItem("maquinas", JSON.stringify(maquinasImp));
-      if (acertosImp) localStorage.setItem("acertos", JSON.stringify(acertosImp));
-      if (ocorrImp) localStorage.setItem("ocorrencias", JSON.stringify(ocorrImp));
-
-      // atualiza variáveis do app sem precisar recarregar
-      try {
-        usuarios = JSON.parse(localStorage.getItem("usuarios") || "[]");
-        maquinas = JSON.parse(localStorage.getItem("maquinas") || "[]");
-        acertos = JSON.parse(localStorage.getItem("acertos") || "[]");
-        ocorrencias = JSON.parse(localStorage.getItem("ocorrencias") || "[]");
-      } catch {}
-
+      await salvarNoFirebase();
       atualizarAlertaOcorrencias();
-      alert("✅ Dados importados com sucesso!");
 
-      // limpa input para permitir importar o mesmo arquivo de novo se quiser
+      alert("✅ Dados importados e enviados pro Firebase!");
       const inp = document.getElementById("inpImportar");
       if (inp) inp.value = "";
-
     } catch (e) {
       alert("❌ Falha ao importar: " + (e?.message || e));
     }
@@ -2145,10 +2551,18 @@ function importarDadosArquivo(event) {
 }
 
 
+
 // =====================
 // ✅ EXPOR FUNÇÕES PRO HTML (porque script.js é type="module")
 // =====================
 Object.assign(window, {
+
+  atualizarStatus,
+crAutoPorNumero,
+salvarCreditoRemoto,
+avisarTodosColaboradores,
+trocarSenhaAdmin,
+  trocarCredenciaisAdmin,
   // login
   fazerLogin,
   sair,
@@ -2205,6 +2619,27 @@ Object.assign(window, {
   autoLocalPorNumero,
   autoLocalPorEstab,
   abrirLocalizacaoMaquina,
+});
+
+// ✅ TESTE (coloque aqui embaixo, no final do arquivo)
+console.log(typeof window.atualizarStatus);
+console.log(typeof window.crAutoPorNumero);
+console.log(typeof window.avisarTodosColaboradores);
+
+
+window.addEventListener("load", () => {
+  const u = document.getElementById("loginUser");
+  const s = document.getElementById("loginSenha");
+
+  const enterLogin = (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      fazerLogin(); // ✅ chama o login certo
+    }
+  };
+
+  u?.addEventListener("keydown", enterLogin);
+  s?.addEventListener("keydown", enterLogin);
 });
 
 
