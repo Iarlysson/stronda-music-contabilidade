@@ -5,62 +5,68 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Stronda Music</title>
   <link rel="stylesheet" href="style.css" />
+  <link rel="icon" href="data:,">
+
 </head>
 <body>
 
-  <!-- TELA LOGIN (aparece primeiro) -->
-  <div id="telaLogin" class="box">
-    <h2 id="tituloLogin" style="margin-top:0;">🎶 Stronda Music</h2>
-    <p id="acessoLogin" style="margin:0 0 14px;">🔐 Acesso</p>
+<!-- TELA LOGIN (aparece primeiro) -->
+<div id="telaLogin" class="box">
+  <h2 id="tituloLogin" style="margin-top:0;">🎶 Stronda Music</h2>
+  <p id="acessoLogin" style="margin:0 0 14px;">🔐 Acesso</p>
 
+  <label>Tipo de acesso</label>
+  <select id="tipoLogin">
+    <option value="ADMIN">Administrador</option>
+    <option value="COLAB">Colaborador</option>
+  </select>
 
-    <label>Tipo de acesso</label>
-    <select id="tipoLogin">
-      <option value="ADMIN">Administrador</option>
-      <option value="COLAB">Colaborador</option>
+  <div id="formLogin" autocomplete="off">
 
-    </select>
+    <label>Usuário</label>
+    <input id="loginUser"
+           type="text"
+           autocomplete="off"
+           autocapitalize="none"
+           spellcheck="false"
+           placeholder="Ex: admin" />
 
-    <div id="formLogin" autocomplete="off">
+    <label>Senha</label>
+    <div class="senha-wrapper">
+      <input id="loginSenha" type="password" placeholder="Senha">
+      <button type="button" class="btn-olho" onclick="toggleSenha('loginSenha', this)">👁️</button>
+    </div>
 
-  <label>Usuário</label>
-  <input id="loginUser"
-         type="text"
-         autocomplete="off"
-         autocapitalize="none"
-         spellcheck="false"
-         placeholder="Ex: admin" />
-
- <label>Senha</label>
-<div class="senha-wrapper">
-  <input id="loginSenha" type="password" placeholder="Senha">
-  <button type="button" class="btn-olho" onclick="toggleSenha('loginSenha', this)">👁️</button>
-</div>
-
-
-  <button type="button" id="btnEntrar" onclick="fazerLogin()">Entrar</button>
-</div>
+    <button id="btnEntrar" type="button" onclick="entrarLogin(document.getElementById('tipoLogin').value)">Entrar</button>
 
 
     <hr style="opacity:.2; margin:16px 0;">
 
     <h3 style="margin:0 0 10px;">🛠 Registrar Defeito Jukebox</h3>
 
-    <label>Número da Máquina</label>
-    <input id="pubOcNum" oninput="pubOcAutoPorNumero()" />
+<label>Empresa</label>
+<select id="pubOcEmpresa" style="width:100%;">
+  <option value="">Selecione...</option>
+</select>
 
-    <label>Nome do Estabelecimento</label>
-    <input id="pubOcEstab" type="text" readonly>
+<label>Número da Máquina</label>
+<input id="pubOcNum" disabled />
+
+<label>Nome do Estabelecimento</label>
+<input id="pubOcEstab" type="text" readonly>
 
     <label>Observações</label>
     <textarea id="pubOcObs" rows="4"
       style="width:100%; padding:10px; border-radius:10px; border:none; margin-top:6px;"></textarea>
 
     <button type="button" onclick="salvarOcorrenciaPublica()">Enviar Ocorrência</button>
-  </div>
+  </div><!-- ✅ FECHA formLogin -->
 
-  <!-- APP (fica escondido até logar) -->
-  <div id="app" class="escondido">
+</div><!-- ✅ FECHA telaLogin -->
+
+<!-- APP (fica escondido até logar) -->
+<div id="app" class="escondido">
+
 
     <h1 id="tituloApp">🎶 Stronda Music</h1>
     <p id="subtitulo">Sistema de Controle</p>
@@ -77,6 +83,9 @@
   💳 Créditos Remotos
 </button>
   <button onclick="abrirHistoricoVendas()">📊 Fechamento de Caixa</button>
+  <button id="btnSelecionarEmpresa" onclick="abrir('selecionarEmpresa')">
+  🏢 Selecionar Empresa
+</button>
   <button onclick="trocarSenhaAdmin()">🔐 Trocar Senha (ADMIN)</button>
   <button onclick="abrir('colaboradores')">👤 Colaboradores</button>
   <button onclick="sair()">🚪 Sair</button>
@@ -187,7 +196,8 @@
 
       <div class="acoes-telefone">
         <button type="button" onclick="ligarTelefone()">📞 Ligar</button>
-        <button type="button" onclick="abrirWhats()">💬 WhatsApp</button>
+        <button type="button" onclick="abrirWhats(event)">💬 WhatsApp</button>
+
       </div>
 
       <label>Endereço / Localização</label>
@@ -223,8 +233,16 @@
 <input id="colabWhats" type="text" placeholder="Ex: 61993631181" inputmode="numeric" autocomplete="off" />
 
   <label>Usuário (login)</label>
-  <input id="colabUser" type="text" placeholder="Ex: joao" />
+<input id="colabUser" type="text" placeholder="Ex: joao" />
 
+<label>Senha do colaborador</label>
+<div class="senha-wrapper">
+  <input id="colabSenha" type="password" placeholder="Ex: 1234" autocomplete="new-password">
+  <button type="button" class="btn-olho" onclick="toggleSenha('colabSenha', this)">👁️</button>
+</div>
+
+<!-- empresa atual (fica invisível) -->
+<input id="empresaIdAtual" type="hidden" value="">
 
   <button type="button" onclick="adicionarColaborador()">➕ Adicionar Colaborador</button>
 
@@ -234,7 +252,50 @@
   <ul id="listaColabs"></ul>
 </div>
 
-     
+<!-- SELECIONAR EMPRESA (ADMIN) -->
+<!-- SELECIONAR EMPRESA (ADMIN) -->
+<div id="selecionarEmpresa" class="box escondido">
+  <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+  <h2>🏢 Empresas</h2>
+
+  
+  <!-- PRÉ-CADASTRO (completo) -->
+  <div style="background:#0f172a; padding:12px; border-radius:12px; margin:10px 0;">
+    <h3 style="margin:0 0 10px;">➕ Pré-cadastro de empresa</h3>
+
+    <label>Empresa ID (ex: STRONDA2) *</label>
+    <input id="pcEmpId" placeholder="EX: EMPRESA2" />
+
+    <label>Nome da empresa *</label>
+    <input id="pcNomeEmpresa" placeholder="EX: Stronda Music LTDA" />
+
+    <label>CPF ou CNPJ (opcional)</label>
+    <input id="pcDoc" placeholder="Opcional (CPF 11 / CNPJ 14)" />
+
+    <label>Nome do ADMIN *</label>
+    <input id="pcAdminNome" placeholder="EX: Iarlysson" />
+
+    <label>Usuário do ADMIN *</label>
+    <input id="pcAdminUser" placeholder="EX: admin_empresa2" />
+
+    <label>Senha do ADMIN *</label>
+    <input id="pcAdminSenha" type="password" placeholder="Mínimo 4 caracteres" />
+
+    <label>Dia de pagamento (1 a 28) *</label>
+    <input id="pcDiaPagamento" type="number" min="1" max="28" value="5" />
+
+    <button id="btnCadastrarEmpresa" type="button" onclick="preCadastrarEmpresa()"
+  style="margin-top:10px; width:100%; padding:12px; border-radius:12px; border:none; font-weight:900; cursor:pointer;">
+  ✅ Cadastrar Empresa
+</button>
+
+  </div>
+
+  <h3 style="margin:0 0 10px;">📋 Empresas cadastradas</h3>
+  <ul id="listaEmpresas"></ul>
+</div>
+
+
 
     <!-- OCORRÊNCIAS -->
     <div id="ocorrencias" class="box escondido">
@@ -242,10 +303,7 @@
 
       <h2>🛠 Ocorrências</h2>
 
-      <button type="button" onclick="avisarOcorrenciaWhats()">
-    📲 Avisar colaborador no WhatsApp
-  </button>
-
+      
       <label>Número da Máquina</label>
       <input id="ocNum" type="text" oninput="ocAutoPorNumero()">
 
