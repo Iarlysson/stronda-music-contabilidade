@@ -1,29 +1,156 @@
-// =====================
-// 🔥 FIREBASE (Firestore) - SINCRONIZAR PC + CELULAR
-// =====================
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+console.log("🚀 INIT script.js", {
+  href: location.href,
+  isTop: window === window.top,
+  referrer: document.referrer,
+  scriptCount: document.querySelectorAll("script[src]").length,
+});
+console.trace("📌 TRACE init script.js");
 
+// erros globais (pode ficar fora do main, ok)
+window.addEventListener("error", (e) => {
+  console.error("❌ ERRO GLOBAL:", e.message, e.filename, e.lineno);
+});
+window.addEventListener("unhandledrejection", (e) => {
+  console.error("❌ PROMISE NÃO TRATADA:", e.reason);
+});
+
+// ✅ bloqueia segunda execução
+if (window.__STRONDA_APP_INIT__) {
+  console.warn("⚠️ script.js já foi iniciado. Ignorando segunda execução.");
+} else {
+  window.__STRONDA_APP_INIT__ = true; // ✅ marca iniciado
+  main().catch((e) => console.error("❌ main() falhou:", e));
+}
+
+
+
+
+
+console.log("✅ script.js carregou!");
+
+// ✅ Firebase App (CDN)
+import { initializeApp, getApps, getApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+
+// ✅ Firestore (CDN)
 import {
   getFirestore,
+  collection,
   doc,
   getDoc,
+  getDocs,
   setDoc,
-  onSnapshot,
-  deleteDoc,
+  addDoc,
   updateDoc,
-  arrayUnion
+  deleteDoc,
+  query,
+  where,
+  orderBy,
+  limit,
+  onSnapshot,
+  arrayUnion,            // ✅ ADICIONA ISSO (você usa lá embaixo)
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
+// ✅ Auth (CDN)
 import {
   getAuth,
-  signInAnonymously
+  signInAnonymously,
+  onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 
-  
 
-let __preloadAt = 0;
-let __preloadEmpresa = "";
-const __preloadCooldownMs = 30000; // 30s
+// 1) Firebase config (use o seu do painel)
+const firebaseConfig = {
+  apiKey: "AIzaSyDwKkCtERVgvOsmEH1X_T1gqn66bDRHsYo",
+  authDomain: "stronda-music-controle.firebaseapp.com",
+  projectId: "stronda-music-controle",
+  storageBucket: "stronda-music-controle.firebasestorage.app",
+  messagingSenderId: "339385914034",
+  appId: "1:339385914034:web:601d747b7151d507ad6fab"
+};
+
+// ✅ (3) Inicialização segura (não duplica app)
+const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+
+// ✅ (4) Logs de debug (coloca logo abaixo do app)
+console.log("Firebase apps:", getApps().length);
+console.log("apiKey em uso:", app.options.apiKey);
+console.log("config completo:", app.options);
+
+// Firebase services
+const db = getFirestore(app);
+const auth = getAuth(app);
+
+let __authReady = null;
+
+function ensureAuth() {
+  if (__authReady) return __authReady;
+
+  __authReady = new Promise((resolve, reject) => {
+    onAuthStateChanged(auth, (user) => {
+      if (user) return resolve(user);
+      signInAnonymously(auth).catch(reject);
+    });
+  });
+
+  return __authReady;
+}
+
+
+// =====================
+// ✅ EMPRESA PRINCIPAL
+// =====================
+const EMPRESA_PRINCIPAL_ID   = "STRONDA-MUSIC";
+const EMPRESA_PRINCIPAL_NOME = "STRONDA MUSIC";
+const EMPRESA_PRINCIPAL = EMPRESA_PRINCIPAL_ID; // ✅ compatibilidade com código antigo
+
+
+
+
+// =====================
+// 🔥 FIREBASE (Firestore)
+// =====================
+
+// 6) Exemplo de submit do formulário (ajuste IDs do seu HTML)
+function iniciarFormulario() {
+  const form = document.getElementById("formMaquina");
+  if (!form) return;
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+
+    const nome = document.getElementById("nomeMaquina")?.value;
+    const serie = document.getElementById("serieMaquina")?.value;
+    const local = document.getElementById("localMaquina")?.value;
+
+    try {
+      await cadastrarMaquina({ nome, serie, local });
+      form.reset();
+    } catch (err) {
+      alert(err.message || "Erro ao cadastrar máquina.");
+      console.error(err);
+    }
+  });
+}
+
+
+function iniciarListaMaquinas() {
+  // TODO: implementar depois
+  console.log("iniciarListaMaquinas: ainda não implementado");
+}
+
+
+// START
+iniciarListaMaquinas();
+iniciarFormulario();
+
+// ✅ agora sim pode expor no console
+window.__db = db;
+
+
+// ✅ e só agora pode usar doc(db,...)
+const EMPRESAS_LIST_DOC = doc(db, "appEmpresas", "lista");
+
+
 let __retryQuotaTimer = null;
 let __firestoreBloqueado = false;
 let __avisouQuotaOffline = false;
@@ -33,6 +160,110 @@ function isQuotaErr(err) {
   const msg  = String(err?.message || "");
   return code.includes("resource-exhausted") || /quota/i.test(msg);
 }
+
+// ===============================
+// ✅ BACKUP LOCAL (anti-perda)
+// ===============================
+function keyBackupEmpresa(empId) {
+  const id = String(
+    empId ||
+    empresaAtualId ||
+    localStorage.getItem("empresaAtualId") ||
+    EMPRESA_PRINCIPAL_ID
+  ).trim().toUpperCase();
+
+  return `backup_${id}`;
+}
+
+
+
+function salvarBackupLocal() {
+  try {
+    const payload = {
+      versao: 1,
+      empresa: (empresaAtualId || localStorage.getItem("empresaAtualId") || EMPRESA_PRINCIPAL_ID),
+      salvoEm: new Date().toISOString(),
+      dados: { ocorrencias, maquinas, acertos, usuarios },
+    };
+
+    localStorage.setItem(keyBackupEmpresa(payload.empresa), JSON.stringify(payload));
+    return true;
+  } catch (e) {
+    console.warn("backup local falhou:", e);
+    return false;
+  }
+}
+
+
+
+function carregarBackupLocal(empId = null) {
+  try {
+    const emp = String(
+      empId ||
+      empresaAtualId ||
+      localStorage.getItem("empresaAtualId") ||
+      EMPRESA_PRINCIPAL_ID
+    ).trim().toUpperCase();
+
+    const raw = localStorage.getItem(keyBackupEmpresa(emp));
+    if (!raw) return false;
+
+    const obj = JSON.parse(raw);
+    const d = obj?.dados || {};
+
+    if (Array.isArray(d.ocorrencias)) ocorrencias = d.ocorrencias;
+    if (Array.isArray(d.maquinas))    maquinas    = d.maquinas.map(normalizarGPSMaquina);
+    if (Array.isArray(d.acertos))     acertos     = d.acertos;
+    if (Array.isArray(d.usuarios))    usuarios    = d.usuarios;
+
+    return true;
+  } catch (e) {
+    console.warn("carregar backup local falhou:", e);
+    return false;
+  }
+}
+
+
+// ✅ Busca estabelecimento pelo número da máquina dentro da empresa escolhida (tela pública)
+async function buscarEstabPorEmpresaENumero(empId, numero) {
+  try {
+    empId = String(empId || "").trim().toUpperCase();
+    numero = String(numero || "").trim().toUpperCase();
+    if (!empId || !numero) return "";
+
+    await ensureAuth();
+
+    const ref = doc(db, "empresas", empId, "dados", "app");
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return "";
+
+    const data = snap.data() || {};
+    const lista = Array.isArray(data.maquinas) ? data.maquinas : [];
+    const m = lista.find(x => String(x.numero || "").toUpperCase() === numero);
+
+    return m ? String(m.estab || "").toUpperCase() : "";
+  } catch (e) {
+    console.error("buscarEstabPorEmpresaENumero erro:", e);
+    if (isQuotaErr(e)) {
+      try { entrarModoOfflinePorQuota(e); } catch {}
+    }
+    return "";
+  }
+}
+
+
+const RETRY_QUOTA_MS = 60 * 60 * 1000; // ✅ 1 hora (DECIDIDO)
+
+
+function normalizaEmpresaId(valor) {
+  return String(valor || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "-"); // espaço vira hífen
+}
+
+
+
 
 function entrarModoOfflinePorQuota(err) {
   __firestoreBloqueado = true;
@@ -56,69 +287,129 @@ function entrarModoOfflinePorQuota(err) {
     );
   }
 
-  console.warn("Firestore em modo offline por quota:", err);
-
-  // ✅ tenta religar depois de 10 minutos (somente quando entrou em quota)
   clearTimeout(__retryQuotaTimer);
   __retryQuotaTimer = setTimeout(() => {
-  __firestoreBloqueado = false;
-  __avisouQuotaOffline = false;
-  iniciarSincronizacaoFirebase();
-}, 60 * 60 * 1000); // ✅ 1 hora
-
+    __firestoreBloqueado = false;
+    __avisouQuotaOffline = false;
+    iniciarSincronizacaoFirebase();
+  }, RETRY_QUOTA_MS);
 }
-
-
-// ✅ COLOQUE AQUI SEU firebaseConfig do Firebase Console
-const firebaseConfig = {
-  apiKey: "AIzaSyDwKkCtERVgvOsmEH1X_T1gqn66bDRHsYo",
-  authDomain: "stronda-music-controle.firebaseapp.com",
-  projectId: "stronda-music-controle",
-  storageBucket: "stronda-music-controle.firebasestorage.app",
-  messagingSenderId: "339385914034",
-  appId: "1:339385914034:web:601d747b7151d507ad6fab"
-};
-
-
-const appFirebase = initializeApp(firebaseConfig);
-const db = getFirestore(appFirebase);
-const auth = getAuth(appFirebase);
-
-
-
-
-
 
 // ✅ UM ÚNICO DOC COM TODOS OS DADOS (mais simples)
 let empresaAtualId = null;
 let docRef = null;
 let unsubSnapshot = null;
-
-let __authPromise = null;
+let empresaAtual = null;
 let __syncAtivo = false;     // indica que snapshot está ligado
 let __syncIniciando = false; // evita iniciar duas vezes ao mesmo tempo
+let __authPromise = null;
 
-async function ensureAuth() {
-  if (__authPromise) return __authPromise;
-  __authPromise = signInAnonymously(auth).catch((e) => {
-    __authPromise = null;
-    throw e;
+
+window.buscarEstabPorEmpresaENumero = buscarEstabPorEmpresaENumero;
+
+
+function esconderBotaoCadastroMaquinaDoColab() {
+  if (isAdmin()) return;
+
+  const botoes = document.querySelectorAll("#menu button, #menu .btn, #menu a, #menu div");
+  botoes.forEach(b => {
+    if ((b.textContent || "").toUpperCase().includes("CADASTRO DE MÁQUINA")) {
+      b.style.display = "none";
+    }
   });
-  return __authPromise;
+}
+
+
+// =====================
+// 🏷️ DEPÓSITO (nome automático)
+// =====================
+let empresaPerfil = {}; // ✅ vamos carregar do Firestore junto com maquinas/usuarios etc
+
+function nomeEmpresaAtual() {
+  const emp = String(empresaAtualId || EMPRESA_PRINCIPAL_ID).toUpperCase();
+  if (emp === EMPRESA_PRINCIPAL_ID.toUpperCase()) return EMPRESA_PRINCIPAL_NOME;
+  return emp;
+}
+
+async function atualizarNomeEmpresaNaTela() {
+  const el = document.getElementById("empresaNomeTopo"); // <- TROQUE pro seu ID real
+  if (!el) return;
+
+  // se tiver função de nome bonito no Firestore, usa ela:
+  if (typeof getNomeBonitoEmpresa === "function") {
+    const bonito = await getNomeBonitoEmpresa(empresaAtualId || EMPRESA_PRINCIPAL_ID);
+    el.textContent = (bonito || nomeEmpresaAtual()).toUpperCase();
+    return;
+  }
+
+  el.textContent = nomeEmpresaAtual().toUpperCase();
+}
+
+
+
+function labelDeposito() {
+  const empId = String(empresaAtualId || EMPRESA_PRINCIPAL_ID).toUpperCase();
+  if (empId === EMPRESA_PRINCIPAL_ID.toUpperCase()) {
+    return `DEPOSITO ${EMPRESA_PRINCIPAL_NOME.toUpperCase()}`;
+  }
+  return `DEPOSITO ${empId}`;
+}
+
+
+async function labelDepositoAsync() {
+  const empId = String(empresaAtualId || EMPRESA_PRINCIPAL_ID).toUpperCase();
+  const nome = await getNomeBonitoEmpresa(empId);
+  return `DEPOSITO ${String(nome || empId).toUpperCase()}`;
 }
 
 
 
 
-function setEmpresaAtual(empresaId){
-  empresaAtualId = String(empresaId || "").trim().toUpperCase();
+function isDepositoStatus(st) {
+  return normalizarStatus(st) === "DEPOSITO";
+}
 
-  // ✅ salva a empresa escolhida (pra não sumir quando abrir de novo)
+
+function abrirFechamentoCaixa() {
+  if (!exigirAdmin()) return;
+  abrir("fechamentoCaixa");
+
+  setPeriodoHojeFechamento();   // ✅ coloca hoje automaticamente
+  renderFechamentoCaixa();      // ✅ gera na hora
+}
+window.abrirFechamentoCaixa = abrirFechamentoCaixa;
+
+async function migrarEmpresaStrondaParaStrondaMusic() {
+  await ensureAuth();
+
+  const de = "STRONDA";
+  const para = EMPRESA_PRINCIPAL_ID;
+
+  const refDe   = doc(db, "empresas", de, "dados", "app");
+  const refPara = doc(db, "empresas", para, "dados", "app");
+
+  const snap = await getDoc(refDe);
+  if (!snap.exists()) {
+    alert("Não existe dados em STRONDA para migrar.");
+    return;
+  }
+
+  await setDoc(refPara, snap.data(), { merge: true });
+  alert(`Migração concluída: ${de} → ${para}`);
+}
+
+
+
+function setEmpresaAtual(empresaId) {
+  empresaAtualId = normalizaEmpresaId(empresaId || EMPRESA_PRINCIPAL_ID);
+  empresaAtual = empresaAtualId;
   localStorage.setItem("empresaAtualId", empresaAtualId);
-
-  // ✅ caminho do Firestore
   docRef = doc(db, "empresas", empresaAtualId, "dados", "app");
+  atualizarNomeEmpresaNaTela().catch(console.error);
+  return empresaAtualId;
 }
+
+
 
 
 
@@ -151,116 +442,6 @@ let usuarios = [];
 let sessaoUsuario = null;
 let firebasePronto = false;
 let __savePendente = false;
-
-
-// =====================
-// ✅ BACKUP LOCAL (anti-perda)
-// =====================
-function keyBackupEmpresa() {
-  const emp = String(empresaAtualId || "STRONDA").toUpperCase();
-  return "BACKUP_EMPRESA_" + emp;
-}
-
-// ====== OCORRÊNCIA PÚBLICA (TELA LOGIN) ======
-const pubEmpresa = document.getElementById("pubOcEmpresa");
-const pubNum = document.getElementById("pubOcNum");
-const pubEstab = document.getElementById("pubOcEstab");
-
-async function buscarEstabPorEmpresaENumero(empId, num) {
-  empId = String(empId || "").trim().toUpperCase();
-  num = String(num || "").trim().toUpperCase();
-  if (!empId || !num) return "";
-
-  try {
-    // ✅ CACHE: 1 leitura por minuto por empresa (em vez de toda digitação)
-    const cached = __cacheEmpresaData.get(empId);
-    if (cached && (Date.now() - cached.at) < __cacheTTLms) {
-      const maquinasEmp = Array.isArray(cached.data.maquinas) ? cached.data.maquinas : [];
-      const m = maquinasEmp.find(x => String(x.numero || "").trim().toUpperCase() === num);
-      return m ? String(m.estab || "").trim().toUpperCase() : "";
-    }
-
-    const ref = doc(db, "empresas", empId, "dados", "app");
-    const snap = await getDoc(ref);
-    if (!snap.exists()) return "";
-
-    const data = snap.data() || {};
-    __cacheEmpresaData.set(empId, { data, at: Date.now() });
-
-    const maquinasEmp = Array.isArray(data.maquinas) ? data.maquinas : [];
-    const m = maquinasEmp.find(x => String(x.numero || "").trim().toUpperCase() === num);
-    return m ? String(m.estab || "").trim().toUpperCase() : "";
-  } catch (e) {
-    console.error("buscarEstabPorEmpresaENumero erro:", e);
-    return "";
-  }
-}
-
-async function carregarDadosUmaVezParaLogin() {
-  try {
-    await ensureAuth();
-    if (!docRef) throw new Error("docRef está null. Chame setEmpresaAtual() antes.");
-
-    const emp = String(empresaAtualId || "").toUpperCase();
-    const now = Date.now();
-
-    // ✅ evita spam de leitura no login
-    if (__preloadEmpresa === emp && (now - __preloadAt) < __preloadCooldownMs) {
-      firebasePronto = true;
-      habilitarBotaoLogin();
-      return;
-    }
-    __preloadEmpresa = emp;
-    __preloadAt = now;
-
-    const snap = await getDoc(docRef);
-    if (!snap.exists()) {
-      await setDoc(docRef, {
-        atualizadoEm: new Date().toISOString(),
-        ocorrencias: [],
-        maquinas: [],
-        acertos: [],
-        usuarios: []
-      });
-    }
-
-    const snap2 = snap.exists() ? snap : await getDoc(docRef);
-    const data = snap2.exists() ? (snap2.data() || {}) : {};
-
-    if (Array.isArray(data.ocorrencias)) ocorrencias = data.ocorrencias;
-    if (Array.isArray(data.maquinas))    maquinas    = data.maquinas.map(normalizarGPSMaquina);
-    if (Array.isArray(data.acertos))     acertos     = data.acertos;
-    if (Array.isArray(data.usuarios))    usuarios    = data.usuarios;
-
-    salvarBackupLocal();
-
-    firebasePronto = true;
-    habilitarBotaoLogin();
-  } catch (e) {
-    console.error("carregarDadosUmaVezParaLogin erro:", e);
-
-    // se quota estourou, entra offline
-    if (isQuotaErr(e)) {
-      entrarModoOfflinePorQuota(e);
-      return;
-    }
-
-    const ok = carregarBackupLocal();
-    firebasePronto = true;
-    habilitarBotaoLogin();
-
-    if (!ok) {
-      alert("❌ Não consegui carregar dados do Firebase e não achei backup local.\n\n" + (e?.message || e));
-    } else {
-      alert("⚠️ Firebase falhou. Carreguei seus dados do backup local.\n\n" + (e?.message || e));
-      try { listarMaquinas(); } catch {}
-      try { atualizarStatus(); } catch {}
-      try { listarOcorrencias(); } catch {}
-    }
-  }
-}
-
-
 
 
 // ==========================
@@ -498,7 +679,7 @@ function salvarCreditoRemoto() {
 function definirEmpresa(){
   if (!exigirAdmin()) return;
 
-  const nome = prompt("Nome/ID da empresa (ex: STRONDA, EMPRESA2, etc):");
+  const nome = prompt("Nome/ID da empresa (ex: EMPRESA_PRINCIPAL_ID, EMPRESA2, etc):");
   if (!nome) return;
 
   const empresaId = String(nome).trim().toUpperCase();
@@ -511,10 +692,14 @@ function definirEmpresa(){
   setEmpresaAtual(empresaId);
 
   firebasePronto = false;
+
   desabilitarBotaoLogin();
   iniciarSincronizacaoFirebase();
 
-  alert("✅ Empresa selecionada: " + empresaId);
+  getNomeBonitoEmpresa(empresaId).then((nome) => {
+  alert("✅ Empresa selecionada: " + (nome || empresaId));
+});
+
 }
 
 
@@ -540,10 +725,10 @@ desabilitarBotaoLogin();
 
 
 let carregandoDoFirebase = false;
-let __rotinaRodouPorEmpresa = {}; // { "STRONDA": true, ... }
+let __rotinaRodouPorEmpresa = {}; // { "EMPRESA_PRINCIPAL_ID": true, ... }
 
 function rodarRotinasApenasUmaVezPorEmpresa() {
-  const emp = String(empresaAtualId || "STRONDA").toUpperCase();
+  const emp = String(empresaAtualId || EMPRESA_PRINCIPAL_ID).toUpperCase();
 
   // já rodou pra essa empresa? então não faz nada
   if (__rotinaRodouPorEmpresa[emp]) return;
@@ -660,23 +845,67 @@ async function salvarNoFirebase(force = false) {
   });
 }
 
+  async function carregarDadosUmaVezParaLogin() {
+  console.log("🚀 carregarDadosUmaVezParaLogin() começou");
+
+  try {
+    await ensureAuth();
+
+    if (!docRef) {
+      const emp = localStorage.getItem("empresaAtualId") || EMPRESA_PRINCIPAL_ID;
+      setEmpresaAtual(emp);
+    }
+
+    await garantirDocExiste();
+
+    const snap = await getDoc(docRef);
+    const data = snap.exists() ? (snap.data() || {}) : {};
+
+    empresaPerfil = data.empresaPerfil || {}; // ✅ ADD
+    ocorrencias = Array.isArray(data.ocorrencias) ? data.ocorrencias : [];
+    maquinas    = Array.isArray(data.maquinas) ? data.maquinas.map(normalizarGPSMaquina) : [];
+    acertos     = Array.isArray(data.acertos) ? data.acertos : [];
+    usuarios    = Array.isArray(data.usuarios) ? data.usuarios : [];
+
+    salvarBackupLocal();
+
+    firebasePronto = true;
+    habilitarBotaoLogin();
+
+    console.log("✅ carregarDadosUmaVezParaLogin() terminou OK");
+    return true;
+
+  } catch (e) {
+    console.error("carregarDadosUmaVezParaLogin erro:", e);
+
+    const ok = carregarBackupLocal();
+    firebasePronto = true;
+    habilitarBotaoLogin();
+
+    if (!ok) {
+      alert("⚠️ Não consegui carregar do Firebase e não achei backup local.");
+    }
+
+    console.log("⚠️ carregarDadosUmaVezParaLogin() terminou com erro");
+    return false;
+  }
+}
 
 
-
- 
 
 async function iniciarSincronizacaoFirebase() {
   if (__firestoreBloqueado) return;
 
   // garante docRef
   if (!docRef) {
-    const emp = localStorage.getItem("empresaAtualId") || "STRONDA";
-    setEmpresaAtual(emp);
+    const emp = localStorage.getItem("empresaAtualId") || EMPRESA_PRINCIPAL_ID;
+setEmpresaAtual(emp);
   }
 
   // se não está logado, só carrega uma vez pro login (sem snapshot)
   if (!sessaoUsuario) {
     await carregarDadosUmaVezParaLogin();
+    await atualizarNomeEmpresaNaTela();
     return;
   }
 
@@ -701,7 +930,8 @@ async function iniciarSincronizacaoFirebase() {
         carregandoDoFirebase = false;
 
         const data = snap.exists() ? (snap.data() || {}) : {};
-
+          
+        empresaPerfil = data.empresaPerfil || {}; // ✅ ADD
         if (Array.isArray(data.ocorrencias)) ocorrencias = data.ocorrencias;
         if (Array.isArray(data.maquinas))    maquinas    = data.maquinas.map(normalizarGPSMaquina);
         if (Array.isArray(data.acertos))     acertos     = data.acertos;
@@ -767,27 +997,30 @@ async function iniciarSincronizacaoFirebase() {
   }
 }
 
+function abrirCreditosRemotos() {
+  if (!exigirAdmin()) return; // ✅ COLAB não entra
+  abrir("creditosRemotos");   // ✅ abre a tela
+}
+window.abrirCreditosRemotos = abrirCreditosRemotos;
 
 
 
   function salvarSessao(u) {
-  sessaoUsuario = { tipo: u.tipo, nome: u.nome, user: u.user, empresaId: u.empresaId || null };
-  localStorage.setItem("sessaoUsuario", JSON.stringify(sessaoUsuario));
+  const tipo = String(u.tipo || "").toUpperCase();
 
-  window.__sessao = sessaoUsuario; // ✅ pra enxergar no console
+  sessaoUsuario = {
+    tipo,
+    nome: u.nome,
+    user: u.user,
+    empresaId: (tipo === "MASTER" ? EMPRESA_PRINCIPAL_ID : (u.empresaId || null)),
+    criadoEm: Date.now()
+  };
+
+  // ❌ NÃO salvar persistente
+  // localStorage.setItem("sessaoUsuario", JSON.stringify(sessaoUsuario));
+
+  window.__sessao = sessaoUsuario;
 }
-
-function carregarSessao() {
-  try {
-    const s = JSON.parse(localStorage.getItem("sessaoUsuario") || "null");
-    sessaoUsuario = s;
-  } catch {
-    sessaoUsuario = null;
-  }
-}
-
-
-
 
 
 function isAdmin() {
@@ -799,6 +1032,69 @@ function isMaster() {
   const t = String(sessaoUsuario?.tipo || "").toUpperCase();
   return t === "MASTER";
 }
+
+window.trocarCredenciaisMaster = async function () {
+  try {
+    if (!exigirMaster()) return;
+
+    // MASTER é sempre na empresa principal
+    const empId = EMPRESA_PRINCIPAL;
+
+    const novoUser = prompt("Digite o NOVO usuário do MASTER (login):", "strondamusic");
+    if (novoUser === null) return;
+
+    const userLimpo = String(novoUser || "").trim().toLowerCase();
+    if (!userLimpo) return alert("❌ Usuário não pode ficar vazio.");
+
+    const novaSenha = prompt("Digite a NOVA senha do MASTER (mín. 4):");
+    if (novaSenha === null) return;
+
+    const senhaLimpa = String(novaSenha || "").trim();
+    if (senhaLimpa.length < 4) return alert("❌ Senha muito curta.");
+
+    const confirma = prompt("Confirme a NOVA senha do MASTER:");
+    if (confirma === null) return;
+
+    if (String(confirma).trim() !== senhaLimpa) {
+      return alert("❌ Confirmação não bate.");
+    }
+
+    // garante que está na empresa EMPRESA_PRINCIPAL_ID carregada
+    pararSnapshotAtual();
+    setEmpresaAtual(empId);
+    await carregarDadosUmaVezParaLogin();
+
+    // acha o usuário MASTER no doc
+    const idx = (usuarios || []).findIndex(u => String(u.tipo || "").toUpperCase() === "MASTER");
+    if (idx === -1) return alert("❌ MASTER não encontrado no banco.");
+
+    // atualiza os dados
+    usuarios[idx].user = userLimpo;
+    usuarios[idx].senha = senhaLimpa;
+
+    // salva no doc da empresa
+    await salvarNoFirebase(true);
+
+    // salva no índice central
+    await salvarLoginIndex({
+      user: userLimpo,
+      tipo: "MASTER",
+      empresaId: EMPRESA_PRINCIPAL,
+      senha: senhaLimpa
+    });
+
+    alert("✅ Credenciais do MASTER atualizadas com sucesso!\n\n⚠️ Faça login novamente com o novo usuário/senha.");
+
+    // desloga
+    sair();
+
+  } catch (e) {
+    console.error(e);
+    alert("❌ Falha ao trocar credenciais do MASTER.\n\n" + (e?.message || e));
+  }
+};
+
+
 
 
 function isLogado() {
@@ -822,6 +1118,47 @@ function exigirAdmin() {
   return true;
 }
 
+function aplicarPermissoesMenu() {
+  const btnSel = document.getElementById("btnSelecionarEmpresa");
+  if (btnSel) btnSel.style.display = isMaster() ? "block" : "none";
+
+  const btnVoltar = document.getElementById("btnVoltarStronda");
+  if (btnVoltar) btnVoltar.style.display = isMaster() ? "block" : "none";
+
+  const btnAR = document.getElementById("btnAtualizarRelogio");
+  if (btnAR) btnAR.style.display = isAdmin() ? "block" : "none"; // ADMIN+MASTER
+
+  // ✅ Créditos Remotos: só ADMIN + MASTER
+  const btnCR = document.getElementById("btnCreditosRemotos");
+  if (btnCR) btnCR.style.display = isAdmin() ? "block" : "none";
+
+    // ✅ Colaboradores: só ADMIN + MASTER
+  const btnColabs = document.getElementById("btnColaboradores");
+  if (btnColabs) btnColabs.style.display = isAdmin() ? "block" : "none";
+  
+  // ✅ Cadastrar Máquina: só ADMIN + MASTER
+  const btnCadMaq = document.getElementById("btnCadastrarMaquina");
+  if (btnCadMaq) btnCadMaq.style.display = isAdmin() ? "block" : "none";
+
+
+  // ✅ Trocar Senha (ADMIN): só ADMIN + MASTER
+  const btnTS = document.getElementById("btnTrocarSenhaAdmin");
+  if (btnTS) btnTS.style.display = isAdmin() ? "block" : "none";
+
+  // ✅ (se tiver) Fechamento de Caixa: só ADMIN + MASTER
+  const btnFC = document.getElementById("btnFechamentoCaixa");
+  if (btnFC) btnFC.style.display = isAdmin() ? "block" : "none";
+
+    // ✅ Trocar Credenciais MASTER: só MASTER
+  const btnTM = document.getElementById("btnTrocarCredenciaisMaster");
+  if (btnTM) btnTM.style.display = isMaster() ? "block" : "none";
+
+}
+
+
+
+
+
 function exigirMaster() {
   if (!isLogado()) {
     alert("❌ Faça login primeiro.");
@@ -835,6 +1172,7 @@ function exigirMaster() {
   }
   return true;
 }
+
 
 
 // =====================
@@ -880,8 +1218,6 @@ function mostrarApp() {
 }
 
 window.mostrarTelaLogin = mostrarTelaLogin;
-window.mostrarApp = mostrarApp;
-
 
 // =====================
 // 🔒 PERMISSÕES (ADMIN x COLAB)
@@ -906,13 +1242,26 @@ function aplicarPermissoesUI() {
   }
 }
 
+function esconderBotaoCadastrarMaquina() {
+  if (isAdmin()) return; // admin/master vê
+
+  // botão do menu (principal)
+  const btnMenu = document.getElementById("btnCadastrarMaquina");
+  if (btnMenu) btnMenu.style.display = "none";
+
+  // se existir algum botão de cadastrar máquina DENTRO da tela de colaboradores
+  const btnDentro = document.querySelector("#colaboradores #btnCadastrarMaquina, #colaboradores .btnCadastrarMaquina");
+  if (btnDentro) btnDentro.style.display = "none";
+}
+
+
 function newId() {
   return (crypto?.randomUUID?.() || (Date.now() + "_" + Math.random().toString(16).slice(2)));
 }
 
 async function migrarLocalStorageParaFirebaseSePreciso() {
   try {
-    const emp = String(empresaAtualId || "STRONDA").toUpperCase();
+    const emp = String(empresaAtualId || EMPRESA_PRINCIPAL_ID).toUpperCase();
     const chave = "MIGROU_LOCAL_PARA_FIREBASE_" + emp;
 
     if (localStorage.getItem(chave) === "1") return;
@@ -961,84 +1310,140 @@ async function migrarLocalStorageParaFirebaseSePreciso() {
   }
 }
 
+async function voltarParaStronda() {
+  try {
+    pararSnapshotAtual();
 
+    setEmpresaAtual(EMPRESA_PRINCIPAL); // EMPRESA_PRINCIPAL_ID
+    localStorage.setItem("empresaAtualId", EMPRESA_PRINCIPAL);
 
-function aplicarPermissoesMenu() {
-  const btnSel = document.getElementById("btnSelecionarEmpresa");
-  if (!btnSel) return; // se não achou o botão, não faz nada
-  btnSel.style.display = isMaster() ? "block" : "none";
-}
+    firebasePronto = false;
+    desabilitarBotaoLogin();
 
+    // carrega dados já (não espera snapshot)
+    await carregarDadosUmaVezParaLogin();
 
+    // liga snapshot da EMPRESA_PRINCIPAL_ID
+    pararSnapshotAtual();
+    __syncAtivo = false;
+    await iniciarSincronizacaoFirebase();
 
+    // atualiza UI
+    mostrarApp();
+    aplicarPermissoesUI();
+    aplicarPermissoesMenu();
+    try { listarMaquinas(); } catch {}
+    try { atualizarStatus(); } catch {}
+    try { listarOcorrencias(); } catch {}
 
-function entrarLogin(tipo) {
-  if (!firebasePronto) {
-    return alert("⏳ Carregando do Firebase... aguarde 2 segundos e tente novamente.");
+    alert(`✅ Voltou para ${EMPRESA_PRINCIPAL_NOME}!`);
+  } catch (e) {
+    console.error(e);
+    alert(`❌ Falha ao voltar para ${EMPRESA_PRINCIPAL_NOME}.\n\n` + (e?.message || e));
   }
+}
+window.voltarParaStronda = voltarParaStronda;
+
+
+async function entrarLogin(tipo) {
+  // garante firebase auth pra conseguir ler o índice
+  try { await ensureAuth(); } catch (e) {}
 
   tipo = String(tipo || "").toUpperCase();
   if (tipo.includes("ADMIN")) tipo = "ADMIN";
   if (tipo.includes("COLAB")) tipo = "COLAB";
 
-  
   const user = (document.getElementById("loginUser")?.value || "").trim().toLowerCase();
   const senha = (document.getElementById("loginSenha")?.value || "").trim();
 
   if (!user || !senha) return alert("❌ Preencha usuário e senha.");
 
-  // 1) pega todos que batem user/senha + tipo
-const candidatos = (usuarios || []).filter(x => {
-  const t = String(x.tipo || "").toUpperCase();
+  // ✅ 1) consulta índice central (descobre empresa/tipo sem depender da empresa atual)
+  let info = null;
+  try {
+    info = await buscarLoginIndex(user);
+  } catch (e) {
+    console.error("buscarLoginIndex erro:", e);
+  }
 
-  const okTipo = (tipo === "ADMIN")
-    ? (t === "ADMIN" || t === "MASTER")
-    : (t === "COLAB");
+  if (!info) return alert("❌ Usuário não encontrado.");
 
-  const okLogin =
-    okTipo &&
+  const tipoReal = String(info.tipo || "").toUpperCase();
+  const empresaDoUser = String(info.empresaId || "").toUpperCase();
+  const senhaReal = String(info.senha || "");
+
+  if (senhaReal !== senha) return alert("❌ Login inválido.");
+
+  // valida tela escolhida vs tipo real
+  if (tipo === "ADMIN" && !(tipoReal === "ADMIN" || tipoReal === "MASTER")) {
+    return alert("❌ Esse usuário não é ADMIN.");
+  }
+  if (tipo === "COLAB" && tipoReal !== "COLAB") {
+    return alert("❌ Esse usuário não é COLAB.");
+  }
+
+ // ✅ 2) MASTER NÃO troca empresa. ADMIN/COLAB troca.
+pararSnapshotAtual();
+
+if (tipoReal === "MASTER") {
+  setEmpresaAtual(EMPRESA_PRINCIPAL); // EMPRESA_PRINCIPAL_ID
+} else {
+  setEmpresaAtual(empresaDoUser);     // empresa do admin/colab
+}
+
+// sempre carrega dados da empresa atual (a que estiver selecionada)
+firebasePronto = false;
+desabilitarBotaoLogin();
+await carregarDadosUmaVezParaLogin();
+habilitarBotaoLogin();
+
+
+  // ✅ 3) pega o usuário real dentro do doc da empresa (pra usar seu salvarSessao(u) igual)
+  const u = (usuarios || []).find(x =>
     String(x.user || "").toLowerCase() === user &&
-    String(x.senha || "") === senha;
+    String(x.senha || "") === senha &&
+    String(x.tipo || "").toUpperCase() === tipoReal
+  );
 
-  if (!okLogin) return false;
-
-  // se for ADMIN normal, só entra na empresa atual
-  if (t === "ADMIN") {
-    const empUser = String(x.empresaId || "").toUpperCase();
-    const empAtual = String(empresaAtualId || "").toUpperCase();
-    return empUser === empAtual;
-  }
-
-  return true;
-});
-
-// 2) ✅ prioridade: MASTER primeiro
-const u =
-  candidatos.find(x => String(x.tipo || "").toUpperCase() === "MASTER") ||
-  candidatos[0];
+  // fallback: se por algum motivo não achou, cria objeto mínimo
+  const userObj = u || {
+  tipo: tipoReal,
+  nome: String(tipoReal),
+  user,
+  senha,
+  empresaId: (tipoReal === "MASTER" ? EMPRESA_PRINCIPAL : empresaDoUser)
+};
 
 
+  salvarSessao(userObj);
+
+// ✅ APLICA CLASSE NO BODY (isso destrava o menu ADMIN)
+aplicarClassePermissaoBody();
+
+// ✅ garante menu certo
+aplicarPermissoesMenu();
+aplicarPermissoesUI();
+esconderBotaoCadastrarMaquina();
+ativarProtecaoCadastroMaquina();
 
 
-  if (!u) return alert("❌ Login inválido.");
 
-  salvarSessao(u);
-
+  // ✅ 4) liga snapshot normalmente
   pararSnapshotAtual();
-__syncAtivo = false;
-iniciarSincronizacaoFirebase(); // agora vai ligar snapshot porque sessaoUsuario existe
+  __syncAtivo = false;
+  iniciarSincronizacaoFirebase();
 
+  if (userObj.tipo === "COLAB") {
+  const nomeBonito = await getNomeBonitoEmpresa(userObj.empresaId);
+  alert("✅ Entrou na empresa: " + (nomeBonito || userObj.empresaId || "SEM EMPRESA"));
+}
 
-    if (u.tipo === "COLAB") {
-    alert("✅ Entrou na empresa: " + (u.empresaId || "SEM EMPRESA"));
-  }
 
   mostrarApp();
   aplicarPermissoesUI();
   aplicarPermissoesMenu();
   atualizarAlertaOcorrencias();
 }
-
 
 
 // =====================
@@ -1076,6 +1481,7 @@ if (!empresaId) return alert("❌ Empresa atual não definida.");
 
 
   salvarNoFirebase();
+salvarLoginIndex({ user, tipo:"COLAB", empresaId, senha, nome });
 
   document.getElementById("colabNome").value = "";
   document.getElementById("colabUser").value = "";
@@ -1092,6 +1498,14 @@ function normalizarWhats(valor) {
   if (n.length > 11) n = n.slice(0, 11);       // limita
   return n.length >= 10 ? n : "";              // valida DDD + num
 }
+
+function limparSessao() {
+  sessaoUsuario = null;
+  localStorage.removeItem("sessaoUsuario");
+  window.__sessao = null;
+}
+
+
 
 function listarColaboradoresComWhats() {
   const empAtual = String(empresaAtualId || "").toUpperCase();
@@ -1353,6 +1767,49 @@ function normalizarStatus(s) {
     .replace(/[\u0300-\u036f]/g, ""); // tira acento: DEPÓSITO -> DEPOSITO
 }
 
+function _normTxt(s) {
+  return (s || "")
+    .toString()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // remove acentos
+    .toUpperCase()
+    .trim();
+}
+
+function esconderCadastroMaquinaParaColab() {
+  if (isAdmin()) return; // admin/master vê
+
+  // tenta achar o container do menu (ajuste aqui se tiver um id/classe específico)
+  const menu =
+    document.getElementById("menu") ||
+    document.getElementById("sidebar") ||
+    document.querySelector(".menu") ||
+    document.querySelector(".sidebar") ||
+    document.body;
+
+  const alvo = _normTxt("Cadastro de Máquina"); // vira "CADASTRO DE MAQUINA"
+
+  // pega itens clicáveis do menu
+  const itens = menu.querySelectorAll("button, a, [role='button'], .btn, li, div");
+
+  itens.forEach(el => {
+    const t = _normTxt(el.textContent);
+    if (t.includes(alvo)) {
+      el.style.display = "none";
+    }
+  });
+}
+
+function ativarProtecaoCadastroMaquina() {
+  // roda já
+  esconderCadastroMaquinaParaColab();
+
+  // roda sempre que algo mudar no DOM (menu sendo recriado)
+  const obs = new MutationObserver(() => esconderCadastroMaquinaParaColab());
+  obs.observe(document.body, { childList: true, subtree: true });
+}
+
+
 function abrir(id) {
   const menu = document.getElementById("menu");
 
@@ -1382,6 +1839,11 @@ function abrir(id) {
   try { listarColaboradores(); } catch(e) { console.log(e); }
 }
 
+if (id === "colaboradores") {
+  try { esconderBotaoCadastrarMaquina(); } catch(e) {}
+}
+
+
 if (id === "selecionarEmpresa") {
   listarEmpresasUI().catch(console.error);
 }
@@ -1405,6 +1867,25 @@ function voltar() {
   window.scrollTo({ top: 0, behavior: "auto" });
 }
 
+function formatarTelefoneBR(valor) {
+  let n = String(valor || "").replace(/\D/g, "");
+
+  // se vier com 55, remove
+  if (n.startsWith("55") && n.length >= 12) n = n.slice(2);
+
+  // limita
+  if (n.length > 11) n = n.slice(0, 11);
+
+  const ddd = n.slice(0, 2);
+  const num = n.slice(2);
+
+  if (n.length <= 2) return n;
+  if (n.length <= 6) return `(${ddd}) ${num}`;
+  if (n.length === 10) return `(${ddd}) ${num.slice(0,4)}-${num.slice(4)}`;      // fixo
+  if (n.length === 11) return `(${ddd}) ${num.slice(0,5)}-${num.slice(5)}`;      // celular
+
+  return `(${ddd}) ${num}`;
+}
 
 
 /* ======================
@@ -1445,7 +1926,7 @@ async function salvarMaquina() {
     porcBase: porc,
     ddd,
     tel,
-    foneFormatado: formatarTelefoneBR(fone),
+    foneFormatado: (typeof formatarTelefoneBR === "function" ? formatarTelefoneBR(fone) : String(fone || "")),
     lat,
     lng,
     resetStatusAt: null,
@@ -1453,7 +1934,7 @@ async function salvarMaquina() {
 
   cadastroGeoTemp = null;
 
-  
+  await salvarNoFirebase(true); // ou salvarNoFirebase()
 
   alert("✅ Máquina cadastrada com sucesso");
   voltar();
@@ -1765,6 +2246,45 @@ function voltarParaStatus() {
 }
 
 
+function fcSetDiarioHoje() {
+  const ini = document.getElementById("fcIni");
+  const fim = document.getElementById("fcFim");
+  if (!ini || !fim) return;
+
+  const hoje = new Date();
+  const yyyy = hoje.getFullYear();
+  const mm = String(hoje.getMonth() + 1).padStart(2, "0");
+  const dd = String(hoje.getDate()).padStart(2, "0");
+  const v = `${yyyy}-${mm}-${dd}`;
+
+  ini.value = v;
+  fim.value = v;
+
+  renderFechamentoCaixa();
+}
+
+function fcSetMensalAtual() {
+  const ini = document.getElementById("fcIni");
+  const fim = document.getElementById("fcFim");
+  if (!ini || !fim) return;
+
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = now.getMonth(); // 0-11
+
+  const first = new Date(yyyy, mm, 1);
+  const last = new Date(yyyy, mm + 1, 0);
+
+  const f1 = `${first.getFullYear()}-${String(first.getMonth()+1).padStart(2,"0")}-${String(first.getDate()).padStart(2,"0")}`;
+  const f2 = `${last.getFullYear()}-${String(last.getMonth()+1).padStart(2,"0")}-${String(last.getDate()).padStart(2,"0")}`;
+
+  ini.value = f1;
+  fim.value = f2;
+
+  renderFechamentoCaixa();
+}
+
+
 function abrirDetalhesCliente(estab) {
   // esconde só as telas internas do app (não mexe no login)
   document.querySelectorAll("#app .box").forEach((b) => {
@@ -1903,9 +2423,71 @@ function abrirDetalheMaquina(numero) {
   const detStatus   = document.getElementById("detStatus");
   const detFone     = document.getElementById("detFone");
 
+
+    // ✅ comportamento automático DEPÓSITO
+  function aplicarUIStatusDeposito() {
+    const st = detStatus?.value || "ALUGADA";
+    const dep = isDepositoStatus(st);
+
+    if (dep) {
+      if (detEstab) {
+        detEstab.value = labelDeposito();
+        detEstab.disabled = true;
+        detEstab.readOnly = true;
+        detEstab.style.opacity = "0.7";
+        detEstab.style.cursor = "not-allowed";
+        detEstab.title = "DEPÓSITO preenche automático";
+      }
+
+      if (detCliente) {
+        detCliente.value = ""; // ✅ apaga cliente
+        detCliente.disabled = true;
+        detCliente.readOnly = true;
+        detCliente.style.opacity = "0.7";
+        detCliente.style.cursor = "not-allowed";
+        detCliente.title = "DEPÓSITO não usa cliente";
+      }
+    } else {
+      // volta ao normal
+      if (detEstab) {
+        detEstab.disabled = false;
+        detEstab.readOnly = false;
+        detEstab.style.opacity = "1";
+        detEstab.style.cursor = "text";
+        detEstab.title = "";
+      }
+
+      if (detCliente) {
+        detCliente.disabled = false;
+        detCliente.readOnly = false;
+        detCliente.style.opacity = "1";
+        detCliente.style.cursor = "text";
+        detCliente.title = "";
+      }
+    }
+  }
+
+  if (detStatus) {
+    detStatus.onchange = aplicarUIStatusDeposito;
+    aplicarUIStatusDeposito(); // ✅ roda ao abrir a tela
+  }
+
   if (tituloMaquina) tituloMaquina.textContent = `🔧 ${m.estab} (JB Nº ${m.numero})`;
 
   if (detNumero)  detNumero.value  = String(m.numero || "");
+
+  if (detNumero) {
+  detNumero.value = String(m.numero || "");
+
+  // ✅ TRAVA: número não pode mudar (nem colab, nem admin)
+  detNumero.readOnly = true;
+  detNumero.disabled = true;
+  detNumero.style.opacity = "0.7";
+  detNumero.style.cursor = "not-allowed";
+  detNumero.title = "Número não pode ser alterado";
+}
+
+
   if (detEstab)   detEstab.value   = String(m.estab || "").toUpperCase();
   if (detCliente) detCliente.value = String(m.cliente || "").toUpperCase();
 
@@ -1987,14 +2569,103 @@ function carregarMaquinaPorNumero() {
 }
 
 let maquinaSelecionadaNumero = null;
-  
+ 
+
+function arAutoPorNumero() {
+  const numEl = document.getElementById("arNum");
+  const estabEl = document.getElementById("arEstab");
+  const cliEl = document.getElementById("arCliente");
+
+  if (!numEl || !estabEl || !cliEl) return;
+
+  const num = (numEl.value || "").trim().toUpperCase();
+  numEl.value = num;
+
+  estabEl.value = "";
+  cliEl.value = "";
+
+  if (!num) return;
+
+  const m = (maquinas || []).find(x => String(x.numero || "").toUpperCase() === num);
+  if (!m) {
+    estabEl.value = "❌ MÁQUINA NÃO ENCONTRADA";
+    cliEl.value = "";
+    return;
+  }
+
+  estabEl.value = String(m.estab || "").toUpperCase();
+  cliEl.value = String(m.cliente || "").toUpperCase();
+}
+
+async function salvarRelogioAtualAdmin() {
+  if (!exigirAdmin()) return; // ✅ só ADMIN/MASTER
+
+  const num = (document.getElementById("arNum")?.value || "").trim().toUpperCase();
+  const rel = Number(document.getElementById("arRelogioAtual")?.value || 0);
+
+  if (!num) return alert("❌ Digite o número da máquina.");
+  if (!Number.isFinite(rel) || rel <= 0) return alert("❌ Digite um relógio válido (maior que 0).");
+
+  const m = (maquinas || []).find(x => String(x.numero || "").toUpperCase() === num);
+  if (!m) return alert("❌ Máquina não encontrada.");
+
+  const antes = m.ultimoRelogio != null ? Number(m.ultimoRelogio) : 0;
+
+  // ✅ não deixa baixar relógio (se quiser permitir, remova essa trava)
+  if (rel < antes) {
+    return alert(`❌ Relógio Atual não pode ser menor que o anterior.\nAnterior: ${antes.toFixed(2)}`);
+  }
+
+  m.ultimoRelogio = rel;
+
+  // histórico opcional
+  if (!Array.isArray(m.historicoRelogio)) m.historicoRelogio = [];
+  m.historicoRelogio.push({
+    id: Date.now(),
+    antes,
+    depois: rel,
+    data: new Date().toISOString(),
+    por: sessaoUsuario?.user || "admin"
+  });
+
+  await salvarNoFirebase(true);
+
+  alert(`✅ Relógio atualizado!\n\n${m.estab}\nJB Nº ${m.numero}\n\n${antes.toFixed(2)} → ${rel.toFixed(2)}`);
+
+  // limpa campos
+  const arNum = document.getElementById("arNum");
+  const arEstab = document.getElementById("arEstab");
+  const arCliente = document.getElementById("arCliente");
+  const arRel = document.getElementById("arRelogioAtual");
+
+  if (arNum) arNum.value = "";
+  if (arEstab) arEstab.value = "";
+  if (arCliente) arCliente.value = "";
+  if (arRel) arRel.value = "";
+
+  voltar();
+}
+
+
+
+function exigirLogado() {
+  if (!isLogado()) {
+    alert("❌ Faça login primeiro.");
+    mostrarTelaLogin();
+    limparCamposLogin();
+    return false;
+  }
+  return true;
+}
+
+
+
 function salvarAlteracoesMaquina() {
-  if (!exigirAdmin()) return;
+  if (!exigirLogado()) return; // ✅ colab pode salvar
 
   const m = maquinas.find(x => x.numero == maquinaSelecionadaNumero);
   if (!m) return alert("Máquina não encontrada");
 
-  // ✅ pega os inputs aqui dentro (escopo correto)
   const detEstab = document.getElementById("detEstab");
   const detCliente = document.getElementById("detCliente");
   const detEndereco = document.getElementById("detEndereco");
@@ -2004,17 +2675,29 @@ function salvarAlteracoesMaquina() {
   const estabAntigo   = (m.estab || "").toUpperCase().trim();
   const clienteAntigo = (m.cliente || "").toUpperCase().trim();
 
-  const estabNovo    = (detEstab?.value || "").trim().toUpperCase();
-  const clienteNovo  = (detCliente?.value || "").trim().toUpperCase();
+  const statusNovo = (detStatus?.value || "ALUGADA");
+
+  let estabNovo    = (detEstab?.value || "").trim().toUpperCase();
+  let clienteNovo  = (detCliente?.value || "").trim().toUpperCase();
   const enderecoNovo = (detEndereco?.value || "").trim().toUpperCase();
-  const statusNovo   = (detStatus?.value || "ALUGADA");
+
+  // ✅ SE for DEPÓSITO: força estab e apaga cliente
+  if (isDepositoStatus(statusNovo)) {
+    estabNovo = labelDeposito(); // ✅ DEPOSITO EMPRESA_PRINCIPAL_ID (na principal)
+    clienteNovo = "";            // ✅ apaga cliente
+  }
 
   if (!estabNovo) return alert("❌ O estabelecimento não pode ficar vazio");
 
-  const duplicado = maquinas.some(x =>
-    x.numero != m.numero && String(x.estab || "").toUpperCase().trim() === estabNovo
-  );
-  if (duplicado) return alert("⚠️ Já existe uma máquina com esse estabelecimento");
+  // ✅ NÃO trava duplicado quando for DEPÓSITO
+  if (!isDepositoStatus(statusNovo)) {
+    const duplicado = maquinas.some(x =>
+      x.numero != m.numero &&
+      normalizarStatus(x.status) !== "DEPOSITO" &&          // ✅ ignora depósitos
+      String(x.estab || "").toUpperCase().trim() === estabNovo
+    );
+    if (duplicado) return alert("⚠️ Já existe uma máquina com esse estabelecimento");
+  }
 
   // ✅ atualiza dados básicos
   m.estab = estabNovo;
@@ -2025,7 +2708,6 @@ function salvarAlteracoesMaquina() {
   // ✅ TELEFONE
   const foneDigitado = (detFone?.value || "").trim();
   const nums = foneDigitado.replace(/\D/g, "").slice(0, 11);
-
   m.ddd = nums.slice(0, 2);
   m.tel = nums.slice(2);
   m.foneFormatado = formatarTelefoneBR(nums);
@@ -2181,6 +2863,182 @@ function pegarGPS() {
     );
   });
 }
+
+function fmtBRL(v) {
+  return Number(v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
+function toDateLocal(dateInputValue, endOfDay=false){
+  // dateInputValue = "2026-01-14"
+  if (!dateInputValue) return null;
+  const [y,m,d] = dateInputValue.split("-").map(Number);
+  const dt = new Date(y, m-1, d, 0,0,0,0);
+  if (endOfDay) dt.setHours(23,59,59,999);
+  return dt;
+}
+
+function setPeriodoHojeFechamento() {
+  const ini = document.getElementById("fcIni");
+  const fim = document.getElementById("fcFim");
+  if (!ini || !fim) return;
+
+  const hoje = new Date();
+  const y = hoje.getFullYear();
+  const m = String(hoje.getMonth()+1).padStart(2,"0");
+  const d = String(hoje.getDate()).padStart(2,"0");
+  const s = `${y}-${m}-${d}`;
+
+  if (!ini.value) ini.value = s;
+  if (!fim.value) fim.value = s;
+}
+
+function renderFechamentoCaixa() {
+  const outResumo = document.getElementById("fcResumo");
+  const outLista  = document.getElementById("fcLista");
+  const iniEl = document.getElementById("fcIni");
+  const fimEl = document.getElementById("fcFim");
+
+  if (!outResumo || !outLista || !iniEl || !fimEl) return;
+
+  if (!iniEl.value || !fimEl.value) {
+    outResumo.innerHTML = `
+      <div style="background:#0f172a; padding:12px; border-radius:12px;">
+        ❌ Selecione <b>Data inicial</b> e <b>Data final</b>.
+      </div>`;
+    outLista.innerHTML = "";
+    return;
+  }
+
+  const dtIni = toDateLocal(iniEl.value, false);
+  const dtFim = toDateLocal(fimEl.value, true);
+
+  // ✅ filtra acertos no período
+  const lista = (acertos || []).filter(a => {
+    const d = new Date(a.data);
+    return d >= dtIni && d <= dtFim;
+  });
+
+  if (!lista.length) {
+    outResumo.innerHTML = `
+      <div style="background:#0f172a; padding:12px; border-radius:12px;">
+        ✅ Nenhum acerto no período.
+      </div>`;
+    outLista.innerHTML = "";
+    return;
+  }
+
+  // ==========================
+  // ✅ Totais (EMPRESA, sem cliente)
+  // ==========================
+  let totalEmpresa = 0;
+  let totalPix = 0;
+  let totalEspecieEmpresa = 0;
+  let totalARecolher = 0;
+  let totalARepassar = 0;
+
+  // agrupador conforme modo
+  const grupo = new Map(); // chave -> acumulados
+
+  lista.forEach(a => {
+    const emp = Number(a.empresa || 0);
+    const pix = Number(a.pix || 0);
+
+    // espécie da empresa = max(0, empresa - pix)
+    const espEmpresa = Math.max(0, emp - pix);
+
+    const recolher = Number(a.especieRecolher || 0);
+    const repassar = Number(a.repassarCliente || 0);
+
+    totalEmpresa += emp;
+    totalPix += pix;
+    totalEspecieEmpresa += espEmpresa;
+    totalARecolher += recolher;
+    totalARepassar += repassar;
+
+    const d = new Date(a.data);
+
+    // chave do agrupamento
+    let key = "";
+    if (__fcModo === "MENSAL") {
+      // yyyy-mm
+      key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+    } else {
+      // DIARIO -> yyyy-mm-dd
+      key = d.toISOString().slice(0,10);
+    }
+
+    if (!grupo.has(key)) {
+      grupo.set(key, {
+        key,
+        totalEmpresa: 0,
+        pix: 0,
+        espEmpresa: 0,
+        recolher: 0,
+        repassar: 0,
+        qt: 0
+      });
+    }
+
+    const g = grupo.get(key);
+    g.totalEmpresa += emp;
+    g.pix += pix;
+    g.espEmpresa += espEmpresa;
+    g.recolher += recolher;
+    g.repassar += repassar;
+    g.qt += 1;
+  });
+
+  // ==========================
+  // ✅ RESUMO TOP
+  // ==========================
+  outResumo.innerHTML = `
+    <div style="background:#0f172a; padding:12px; border-radius:12px; line-height:1.4;">
+      <b>📌 Modo:</b> ${__fcModo === "MENSAL" ? "MENSAL" : "DIÁRIO"}<br>
+      <b>📅 Período:</b> ${iniEl.value.split("-").reverse().join("/")} até ${fimEl.value.split("-").reverse().join("/")}<br><br>
+
+      <b>🏢 CAIXA DA EMPRESA (sem cliente)</b><br>
+      ✅ <b>Total Empresa:</b> ${fmtBRL(totalEmpresa)}<br>
+      💳 <b>PIX Empresa:</b> ${fmtBRL(totalPix)}<br>
+      💵 <b>Espécie Empresa:</b> ${fmtBRL(totalEspecieEmpresa)}<br><br>
+
+      💰 <b>A recolher (espécie):</b> ${fmtBRL(totalARecolher)}<br>
+      💸 <b>A repassar:</b> ${fmtBRL(totalARepassar)}<br><br>
+
+      ✅ <b>Qtd acertos:</b> ${lista.length}
+    </div>
+  `;
+
+  // ==========================
+  // ✅ LISTA (agrupada)
+  // ==========================
+  const ordenado = [...grupo.values()].sort((a,b)=> a.key.localeCompare(b.key));
+
+  let html = `<div style="display:flex; flex-direction:column; gap:10px;">`;
+
+  ordenado.forEach(g => {
+    const titulo =
+      (__fcModo === "MENSAL")
+        ? `${g.key.split("-")[1]}/${g.key.split("-")[0]}`   // mm/yyyy
+        : g.key.split("-").reverse().join("/");            // dd/mm/yyyy
+
+    html += `
+      <div style="background:#111827; padding:12px; border-radius:12px;">
+        <b>${titulo}</b> — ${g.qt} acerto(s)<br><br>
+
+        🏢 <b>Empresa:</b> ${fmtBRL(g.totalEmpresa)}<br>
+        💳 <b>PIX:</b> ${fmtBRL(g.pix)}<br>
+        💵 <b>Espécie:</b> ${fmtBRL(g.espEmpresa)}<br><br>
+
+        💰 <b>A recolher:</b> ${fmtBRL(g.recolher)}<br>
+        💸 <b>A repassar:</b> ${fmtBRL(g.repassar)}
+      </div>
+    `;
+  });
+
+  html += `</div>`;
+  outLista.innerHTML = html;
+}
+
 
 function toNumberCoord(v) {
   if (v === null || v === undefined) return null;
@@ -2851,16 +3709,32 @@ function limparHistoricoVendas() {
   }
 }
 
+async function fazerLogin(e) {
+  e?.preventDefault?.();
 
+  console.log("1) clique login");
+  mostrarLoading(true);
 
+  try {
+    console.log("2) antes do signIn");
+    // AQUI seu signIn (email/senha ou anon)
+    // await signInWithEmailAndPassword(auth, email, senha);
+    // OU await signInAnonymously(auth);
 
-// Função para fazer login
-function fazerLogin() {
-  const tipo = document.getElementById("tipoLogin")?.value || "ADMIN";
-  // usa o login certo (Firebase)
-  entrarLogin(tipo);
+    console.log("3) depois do signIn ✅");
+
+    console.log("4) antes de carregar empresas");
+    await carregarEmpresas(); // ou a função que busca Firestore
+    console.log("5) depois de carregar empresas ✅");
+
+  } catch (err) {
+    console.error("ERRO no login:", err);
+    alert(err?.message || err);
+  } finally {
+    console.log("6) finally -> desliga loading");
+    mostrarLoading(false);
+  }
 }
-window.fazerLogin = fazerLogin;
 
 
 
@@ -3209,45 +4083,74 @@ async function trocarSenhaAdmin() {
 
   admin.senha = novaLimpa;
   salvarNoFirebase();
+salvarLoginIndex({ user: admin.user, tipo:"ADMIN", empresaId: admin.empresaId, senha: admin.senha });
 
   alert("✅ Senha do ADMIN alterada com sucesso!");
 }
 
 
+
 async function trocarCredenciaisAdmin() {
   window.trocarCredenciaisAdmin = trocarCredenciaisAdmin;
-  if (!exigirAdmin()) return; // ✅ sem pedir senha extra
 
-  const novoUser = prompt("Digite o NOVO usuário do ADMIN (ex: admin2):");
+  // ✅ só MASTER deveria trocar credenciais do ADMIN (mais seguro)
+  if (!exigirMaster()) return;
+
+  const empId = String(empresaAtualId || "").trim().toUpperCase();
+  if (!empId) return alert("❌ Empresa atual não definida.");
+
+  const nome = prompt("Digite o NOME do novo ADMIN:");
+  if (nome === null) return;
+  const nomeLimpo = String(nome).trim().toUpperCase();
+  if (!nomeLimpo) return alert("❌ Nome não pode ficar vazio.");
+
+  const novoUser = prompt("Digite o USUÁRIO do novo ADMIN (ex: admin_empresa):");
   if (novoUser === null) return;
+  const userLimpo = String(novoUser).trim().toLowerCase();
+  if (!userLimpo) return alert("❌ Usuário não pode ficar vazio.");
 
-  const novoUserLimpo = String(novoUser).trim().toLowerCase();
-  if (!novoUserLimpo) return alert("❌ Usuário não pode ficar vazio.");
-
-  const novaSenha = prompt("Digite a NOVA senha do ADMIN (mínimo 4 caracteres):");
+  const novaSenha = prompt("Digite a SENHA do novo ADMIN (mínimo 4 caracteres):");
   if (novaSenha === null) return;
+  const senhaLimpa = String(novaSenha).trim();
+  if (senhaLimpa.length < 4) return alert("❌ Senha muito curta.");
 
-  const novaSenhaLimpa = String(novaSenha).trim();
-  if (novaSenhaLimpa.length < 4) return alert("❌ Senha muito curta.");
-
-  const confirma = prompt("Confirme a NOVA senha do ADMIN:");
+  const confirma = prompt("Confirme a SENHA do novo ADMIN:");
   if (confirma === null) return;
+  if (String(confirma).trim() !== senhaLimpa) return alert("❌ Confirmação não bate.");
 
-  if (String(confirma).trim() !== novaSenhaLimpa) {
-    alert("❌ Confirmação não bate.");
-    return;
-  }
+  // ✅ acha o ADMIN da empresa atual
+  const idx = (usuarios || []).findIndex(u =>
+    String(u.tipo || "").toUpperCase() === "ADMIN" &&
+    String(u.empresaId || "").toUpperCase() === empId
+  );
 
-  const admin = (usuarios || []).find(u => String(u.tipo || "").toUpperCase() === "ADMIN");
-  if (!admin) return alert("❌ Admin não encontrado.");
+  if (idx === -1) return alert("❌ ADMIN não encontrado nessa empresa.");
 
-  admin.user = novoUserLimpo;
-  admin.senha = novaSenhaLimpa;
+  // ⚠️ impede usuário duplicado (mesmo dentro da empresa)
+  const duplicado = (usuarios || []).some((u, i) =>
+    i !== idx &&
+    String(u.user || "").toLowerCase() === userLimpo
+  );
+  if (duplicado) return alert("❌ Já existe outro usuário com esse login.");
 
-  salvarNoFirebase();
+  // ✅ atualiza no array local e no doc da empresa
+  usuarios[idx].nome = nomeLimpo;
+  usuarios[idx].user = userLimpo;
+  usuarios[idx].senha = senhaLimpa;
 
-  alert("✅ Usuário e senha do ADMIN alterados!");
+  await salvarNoFirebase(true);
+
+  // ✅ atualiza também o índice central (login)
+  await salvarLoginIndex({
+    user: userLimpo,
+    tipo: "ADMIN",
+    empresaId: empId,
+    senha: senhaLimpa
+  });
+
+  alert("✅ Credenciais do ADMIN atualizadas (Nome/Usuário/Senha) e salvas no banco!");
 }
+
 
 function exportarDados() {
   const payload = {
@@ -3319,8 +4222,6 @@ function toggleSenha(id, btn){
   btn.textContent = mostrando ? "👁️" : "🙈";
 }
 
-window.toggleSenha = toggleSenha;
-
 
 function importarDadosArquivo(event) {
   const file = event.target.files?.[0];
@@ -3354,6 +4255,7 @@ function importarDadosArquivo(event) {
 
 
 function sair() {
+  pararSnapshotAtual();
   sessaoUsuario = null;
   localStorage.removeItem("sessaoUsuario");
   window.__sessao = null; // ✅
@@ -3364,55 +4266,57 @@ function sair() {
 // =====================
 // 🏢 EMPRESAS (LISTA CENTRAL)
 // =====================
-const EMPRESA_PRINCIPAL = "STRONDA";
-
 async function criarEstruturaEmpresaSeNaoExistir(emp) {
   emp = String(emp || "").trim().toUpperCase();
   if (!emp) return;
 
+  await ensureAuth();
+
   const ref = doc(db, "empresas", emp, "dados", "app");
   const snap = await getDoc(ref);
 
-  if (snap.exists()) return; // já existe, não mexe
+  // se já existe, não recria
+  if (snap.exists()) {
+    // mas garante que o índice central tenha os logins
+    try { await repararIndiceLoginsDaEmpresa(emp); } catch {}
+    return;
+  }
 
   const usuariosBase = [
-    // ✅ MASTER (você) — pra conseguir entrar em qualquer empresa
+    // MASTER
     {
       id: Date.now(),
       tipo: "MASTER",
       nome: "MASTER",
       user: "strondamusic",
-      senha: "strondamusic",
-      empresaId: "MASTER"
-    },
+      senha: "stronda musicmusic",
+      empresaId: EMPRESA_PRINCIPAL // "EMPRESA_PRINCIPAL_ID"
 
-    // ✅ ADMIN automático da empresa
+    },
+    // ADMIN da empresa
     {
       id: Date.now() + 1,
       tipo: "ADMIN",
       nome: "ADMIN",
-      user: `admin_${emp.toLowerCase()}`, // ex: admin_empresa2
+      user: `admin_${emp.toLowerCase()}`,
       senha: "1234",
       empresaId: emp
     }
   ];
 
-    const payload = {
+  const payload = {
     atualizadoEm: new Date().toISOString(),
     ocorrencias: [],
     maquinas: [],
     acertos: [],
     usuarios: usuariosBase,
 
-    // ✅ PERFIL DA EMPRESA
     empresaPerfil: {
-      nomeEmpresa: emp,          // se ainda não tem campo, usa o ID
-      adminNome: "ADMIN",        // depois você preenche no pré-cadastro
+      nomeEmpresa: emp,
+      adminNome: "ADMIN",
       criadoEm: new Date().toISOString(),
-      // docTipo/docNumero só entra se você tiver no pré-cadastro
     },
 
-    // ✅ PAGAMENTO / BLOQUEIO
     billing: {
       diaPagamento: 5,
       ultimoPagamentoEm: new Date().toISOString(),
@@ -3422,17 +4326,76 @@ async function criarEstruturaEmpresaSeNaoExistir(emp) {
     }
   };
 
+  // 1) cria o doc da empresa
   await setDoc(ref, payload);
 
-
-  console.log("✅ Empresa criada no Firestore:", emp);
+  // 2) grava os logins no índice central
+  for (const u of usuariosBase) {
+    await salvarLoginIndex({
+      user: u.user,
+      tipo: u.tipo,
+      empresaId: u.empresaId,
+      senha: u.senha
+    });
+  }
 }
+
+
+async function repararIndiceLoginsDaEmpresa(empId) {
+  empId = String(empId || "").trim().toUpperCase();
+  if (!empId) return;
+
+  await ensureAuth();
+
+  const ref = doc(db, "empresas", empId, "dados", "app");
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return;
+
+  const data = snap.data() || {};
+  const lista = Array.isArray(data.usuarios) ? data.usuarios : [];
+
+  // grava TODOS os usuários no índice central
+  for (const u of lista) {
+    if (!u?.user || !u?.senha || !u?.tipo) continue;
+
+    await salvarLoginIndex({
+      user: u.user,
+      tipo: u.tipo,
+      empresaId: u.empresaId || empId,
+      senha: u.senha
+    });
+  }
+}
+
+function aplicarClassePermissaoBody() {
+  document.body.classList.remove("is-admin", "is-master", "is-colab");
+
+  if (!sessaoUsuario) {
+    return; // sem login = nada
+  }
+
+  const t = String(sessaoUsuario.tipo || "").toUpperCase();
+
+  if (t === "MASTER") {
+    document.body.classList.add("is-master", "is-admin");
+    return;
+  }
+
+  if (t === "ADMIN") {
+    document.body.classList.add("is-admin");
+    return;
+  }
+
+  document.body.classList.add("is-colab");
+}
+
+
 
 async function selecionarEmpresa(emp) {
   emp = String(emp || "").trim().toUpperCase();
   if (!emp) return;
 
-  pararSnapshotAtual(); // ✅ PARA snapshot antes de trocar
+  pararSnapshotAtual();
 
   setEmpresaAtual(emp);
   localStorage.setItem("empresaAtualId", emp);
@@ -3440,15 +4403,31 @@ async function selecionarEmpresa(emp) {
   firebasePronto = false;
   desabilitarBotaoLogin();
 
-  await iniciarSincronizacaoFirebase();
+  await carregarDadosUmaVezParaLogin();
 
-  if (isLogado()) {
-    mostrarApp();
-    aplicarPermissoesUI();
+  // ✅ SEMPRE entra no app e mostra o menu
+  mostrarApp();
+  voltar(); // ✅ menu aparece sempre
+
+  // ✅ se sessão é válida nessa empresa, aplica permissões e liga snapshot
+  if (validarSessaoPersistida()) {
+    aplicarClassePermissaoBody();
     aplicarPermissoesMenu();
+    aplicarPermissoesUI();
+
+    pararSnapshotAtual();
+    __syncAtivo = false;
+    await iniciarSincronizacaoFirebase();
   } else {
-    mostrarTelaLogin();
+    // ✅ sem login: só entra “pra olhar”
+    // (não aplica classe/permissão de admin)
+    document.body.classList.remove("is-admin", "is-master", "is-colab");
   }
+
+  try { listarMaquinas(); } catch {}
+  try { atualizarStatus(); } catch {}
+  try { listarOcorrencias(); } catch {}
+  try { atualizarAlertaOcorrencias(); } catch {}
 }
 window.selecionarEmpresa = selecionarEmpresa;
 
@@ -3491,6 +4470,28 @@ function validarPreCadastro({empId, nomeEmpresa, doc, adminNome, adminUser, admi
   };
 }
 
+// ✅ Nome bonito da empresa pelo ID (usa a lista central config/empresas)
+async function getNomeBonitoEmpresa(empId) {
+  empId = String(empId || "").trim().toUpperCase();
+  if (!empId) return "";
+
+  try {
+    // cache simples 60s
+    window.__cacheNomeEmpresa = window.__cacheNomeEmpresa || new Map();
+    const cache = window.__cacheNomeEmpresa.get(empId);
+    if (cache && (Date.now() - cache.at) < 60000) return cache.nome;
+
+    const lista = await garantirListaEmpresas(); // [{id,nome}]
+    const obj = (lista || []).find(e => String(e.id || "").toUpperCase() === empId);
+
+    const nome = String(obj?.nome || empId).trim();
+    window.__cacheNomeEmpresa.set(empId, { nome, at: Date.now() });
+    return nome;
+  } catch (e) {
+    return empId; // fallback
+  }
+}
+
 
 async function preCadastrarEmpresa() {
   try {
@@ -3523,11 +4524,19 @@ async function preCadastrarEmpresa() {
     const data = v.data;
 
     // 1) lista central
-    let lista = await garantirListaEmpresas();
-    if (!lista.includes(data.empId)) {
-      lista.push(data.empId);
-      await salvarListaEmpresas(lista);
+        let lista = await garantirListaEmpresas(); // [{id,nome}]
+
+    const idxEmp = lista.findIndex(e => String(e.id||"").toUpperCase() === data.empId);
+
+    if (idxEmp === -1) {
+      lista.push({ id: data.empId, nome: data.nomeEmpresa }); // ✅ nome real
+    } else {
+      // ✅ atualiza nome se mudou
+      lista[idxEmp].nome = data.nomeEmpresa;
     }
+
+    await salvarListaEmpresas(lista);
+
 
     // 2) cria estrutura base se precisar
     await criarEstruturaEmpresaSeNaoExistir(data.empId);
@@ -3548,7 +4557,8 @@ async function preCadastrarEmpresa() {
         nome: "MASTER",
         user: "strondamusic",
         senha: "strondamusic",
-        empresaId: "MASTER"
+        empresaId: EMPRESA_PRINCIPAL
+
       });
     }
 
@@ -3592,6 +4602,27 @@ async function preCadastrarEmpresa() {
       }
     }, { merge: true });
 
+
+    window.addEventListener("DOMContentLoaded", () => {
+  const btn = document.getElementById("btnCadastrarEmpresa");
+  if (!btn) {
+    console.warn("❌ Não achei #btnCadastrarEmpresa no HTML");
+    return;
+  }
+
+  btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    console.log("🔥 Clique detectado no botão cadastrar empresa");
+    preCadastrarEmpresa();
+  });
+});
+
+
+    // ✅ salva/atualiza no índice central
+
+await salvarLoginIndex({ user: data.adminUser, tipo: "ADMIN", empresaId: data.empId, senha: data.adminSenha });
+
+
     // 4) seleciona e atualiza UI
     await selecionarEmpresa(data.empId);
     await listarEmpresasUI();
@@ -3625,29 +4656,75 @@ async function garantirListaEmpresas() {
   const snap = await getDoc(ref);
 
   if (!snap.exists()) {
-    await setDoc(ref, {
-      atualizadoEm: new Date().toISOString(),
-      empresas: [EMPRESA_PRINCIPAL]
-    });
-    return [EMPRESA_PRINCIPAL];
+    const inicial = [{ id: EMPRESA_PRINCIPAL_ID, nome: EMPRESA_PRINCIPAL_NOME }];
+    await setDoc(ref, { atualizadoEm: new Date().toISOString(), empresas: inicial });
+    return inicial;
   }
 
   const data = snap.data() || {};
   let lista = Array.isArray(data.empresas) ? data.empresas : [];
-  lista = lista.map(e => String(e || "").trim().toUpperCase()).filter(Boolean);
 
-  if (!lista.includes(EMPRESA_PRINCIPAL)) {
-    lista.unshift(EMPRESA_PRINCIPAL);
-    await setDoc(ref, { empresas: lista, atualizadoEm: new Date().toISOString() }, { merge: true });
+  lista = lista
+    .map(e => {
+      // compat: se antes era string
+      if (typeof e === "string") {
+        const id = e.trim().toUpperCase();
+        return { id, nome: id };
+      }
+
+      const id = String(e?.id || "").trim().toUpperCase();
+      let nome = String(e?.nome || id).trim();
+
+      // ✅ FORÇA nome bonito da principal
+      if (id === EMPRESA_PRINCIPAL_ID.toUpperCase()) {
+        nome = EMPRESA_PRINCIPAL_NOME;
+      }
+
+      return { id, nome };
+    })
+    .filter(x => x.id);
+
+  // ✅ garante principal na lista e com nome bonito
+  if (!lista.some(x => x.id === EMPRESA_PRINCIPAL_ID.toUpperCase())) {
+    lista.unshift({ id: EMPRESA_PRINCIPAL_ID.toUpperCase(), nome: EMPRESA_PRINCIPAL_NOME });
   }
+
+  // salva de volta se precisou corrigir/migrar
+  await setDoc(ref, { empresas: lista, atualizadoEm: new Date().toISOString() }, { merge: true });
 
   return lista;
 }
 
+
 async function salvarListaEmpresas(lista) {
   const ref = empresasConfigRef();
-  await setDoc(ref, { empresas: lista, atualizadoEm: new Date().toISOString() }, { merge: true });
+
+  const normalizada = (lista || [])
+    .map(e => {
+      if (typeof e === "string") {
+        const id = e.trim().toUpperCase();
+        return { id, nome: id };
+      }
+      const id = String(e?.id || "").trim().toUpperCase();
+      let nome = String(e?.nome || id).trim();
+
+      // ✅ FORÇA nome bonito da principal
+      if (id === EMPRESA_PRINCIPAL_ID.toUpperCase()) {
+        nome = EMPRESA_PRINCIPAL_NOME;
+      }
+
+      return { id, nome };
+    })
+    .filter(x => x.id);
+
+  await setDoc(ref, {
+    atualizadoEm: new Date().toISOString(),
+    empresas: normalizada
+  }, { merge: true });
+
+  return normalizada;
 }
+
 
 async function listarEmpresasUI() {
   if (!exigirMaster()) return;
@@ -3655,10 +4732,10 @@ async function listarEmpresasUI() {
   const ul = document.getElementById("listaEmpresas");
   if (!ul) return;
 
-  let lista = await garantirListaEmpresas();
+  let lista = await garantirListaEmpresas(); // [{id,nome}]
 
-  // ✅ REMOVE A PRINCIPAL DA TELA (mas continua existindo no Firestore)
-  lista = lista.filter(emp => emp !== EMPRESA_PRINCIPAL);
+  // remove principal da tela
+  lista = lista.filter(e => e.id !== EMPRESA_PRINCIPAL);
 
   ul.innerHTML = "";
 
@@ -3667,7 +4744,10 @@ async function listarEmpresasUI() {
     return;
   }
 
-  lista.forEach((emp) => {
+  lista.forEach((obj) => {
+    const empId = obj.id;
+    const nome = obj.nome || empId;
+
     const li = document.createElement("li");
     li.style.display = "flex";
     li.style.gap = "10px";
@@ -3680,9 +4760,9 @@ async function listarEmpresasUI() {
 
     const btnSel = document.createElement("button");
     btnSel.type = "button";
-    btnSel.textContent = `✅ Selecionar ${emp}`;
+    btnSel.textContent = `✅ Selecionar ${nome}`;
     btnSel.style.flex = "1";
-    btnSel.onclick = () => selecionarEmpresa(emp);
+    btnSel.onclick = () => selecionarEmpresa(empId);
 
     const btnDel = document.createElement("button");
     btnDel.type = "button";
@@ -3690,36 +4770,32 @@ async function listarEmpresasUI() {
     btnDel.style.width = "60px";
 
     btnDel.onclick = async () => {
-
       pararSnapshotAtual();
-  try {
-    if (!confirm(`Apagar a empresa ${emp}?`)) return;
 
-    // ✅ tira da tela na hora (UX + evita recarregar lista)
-    li.remove();
+      try {
+        if (!confirm(`Apagar a empresa ${nome} (${empId})?`)) return;
 
-    // 1) remove da lista central (1 write)
-    const nova = (await garantirListaEmpresas()).filter(x => x !== emp);
-    await salvarListaEmpresas(nova);
+        li.remove();
 
-    // 2) apaga o doc principal da empresa (1 write)
-    await deleteDoc(doc(db, "empresas", emp, "dados", "app"));
+        // remove da lista central
+        const nova = (await garantirListaEmpresas()).filter(x => x.id !== empId);
+        await salvarListaEmpresas(nova);
 
-    alert("✅ Empresa apagada!");
-  } catch (e) {
-    console.error(e);
+        // apaga doc da empresa
+        await deleteDoc(doc(db, "empresas", empId, "dados", "app"));
 
-    // se deu erro, recarrega lista pra não ficar UI “mentindo”
-    try { await listarEmpresasUI(); } catch {}
+        alert("✅ Empresa apagada!");
+      } catch (e) {
+        console.error(e);
+        try { await listarEmpresasUI(); } catch {}
 
-    // ✅ mensagem certa pra quota
-    if (String(e?.code || "").includes("resource-exhausted") || /quota/i.test(String(e?.message||""))) {
-      alert("❌ Firestore estourou a quota agora. Reduza leituras/gravações (vou te mostrar abaixo e o que mudar).");
-    } else {
-      alert("❌ Não consegui apagar.\n\n" + (e?.message || e));
-    }
-  }
-};
+        if (String(e?.code || "").includes("resource-exhausted") || /quota/i.test(String(e?.message||""))) {
+          alert("❌ Firestore estourou a quota agora. Reduza leituras/gravações.");
+        } else {
+          alert("❌ Não consegui apagar.\n\n" + (e?.message || e));
+        }
+      }
+    };
 
     li.appendChild(btnSel);
     li.appendChild(btnDel);
@@ -3728,51 +4804,222 @@ async function listarEmpresasUI() {
 }
 
 
+async function preencherSelectEmpresas(selId, lblId = null) {
+  const sel = document.getElementById(selId);
+  if (!sel) return;
+
+  try {
+    await ensureAuth();
+
+    let lista = await garantirListaEmpresas(); // [{id,nome}]
+
+    const norm = (lista || [])
+      .map(e => {
+        if (typeof e === "string") {
+          const id = e.trim().toUpperCase();
+          return { id, nome: id };
+        }
+        const id = String(e?.id || "").trim().toUpperCase();
+        let nome = String(e?.nome || "").trim();
+
+        if (id === EMPRESA_PRINCIPAL_ID && !nome) nome = EMPRESA_PRINCIPAL_NOME;
+
+
+        return { id, nome: nome || id };
+      })
+      .filter(x => x.id);
+
+    sel.innerHTML = `<option value="">Selecione...</option>`;
+
+    norm.forEach(({ id, nome }) => {
+      const opt = document.createElement("option");
+      opt.value = id;         // ✅ o ID continua sendo o valor
+      opt.textContent = nome; // ✅ nome bonito
+
+      opt.dataset.nome = nome;
+      sel.appendChild(opt);
+    });
+
+    // opcional: mostrar nome selecionado em um label
+    if (lblId) {
+      const lbl = document.getElementById(lblId);
+      const atualizar = () => {
+        const opt = sel.options[sel.selectedIndex];
+        const nome = opt?.dataset?.nome || "";
+        if (lbl) lbl.textContent = nome ? `🏢 ${nome}` : "";
+      };
+      sel.onchange = atualizar;
+      atualizar();
+    }
+
+  } catch (e) {
+    console.error("❌ erro preencherSelectEmpresas:", e);
+    // fallback mínimo
+    sel.innerHTML = `
+  <option value="">Selecione...</option>
+  <option value="${EMPRESA_PRINCIPAL_ID}">${EMPRESA_PRINCIPAL_NOME}</option>
+`;
+  }
+}
+window.preencherSelectEmpresas = preencherSelectEmpresas;
+
+
 async function adicionarEmpresa() {
   if (!exigirMaster()) return;
 
-  const inp = document.getElementById("empresaNova");
-  const nome = String(inp?.value || "").trim().toUpperCase();
+  const empId = prompt("ID da empresa (ex: EMPRESA2):");
+  if (empId === null) return;
 
-  if (!nome) return alert("❌ Digite um nome de empresa.");
-  if (nome === EMPRESA_PRINCIPAL) return alert("⚠️ STRONDA já é a principal.");
+  const id = String(empId).trim().toUpperCase();
+  if (!id) return alert("❌ ID inválido.");
+  if (id === EMPRESA_PRINCIPAL) return alert("⚠️ EMPRESA_PRINCIPAL_ID já é a principal.");
 
-  let lista = await garantirListaEmpresas();
-  if (lista.includes(nome)) return alert("⚠️ Empresa já existe.");
+  const nomeBonito = prompt("Nome completo da empresa (vai aparecer na ocorrência):", id);
+  if (nomeBonito === null) return;
 
-  lista.push(nome);
+  const nome = String(nomeBonito).trim();
+  if (!nome) return alert("❌ Nome não pode ficar vazio.");
+
+  let lista = await garantirListaEmpresas(); // [{id,nome}]
+
+  const idx = lista.findIndex(e => String(e.id || "").toUpperCase() === id);
+  if (idx === -1) {
+    lista.push({ id, nome });
+  } else {
+    lista[idx].nome = nome; // atualiza nome se mudou
+  }
+
   await salvarListaEmpresas(lista);
 
-  // ✅ cria /empresas/NOME/dados/app com MASTER + ADMIN automático
-  await criarEstruturaEmpresaSeNaoExistir(nome);
+  // cria estrutura /empresas/ID/dados/app se precisar
+  await criarEstruturaEmpresaSeNaoExistir(id);
 
-  if (inp) inp.value = "";
   await listarEmpresasUI();
-  alert("✅ Empresa adicionada!");
+  alert("✅ Empresa adicionada com nome completo!");
 }
+window.adicionarEmpresa = adicionarEmpresa;
+
+
+async function carregarEmpresas() {
+  const lista = document.getElementById("listaEmpresas"); // <-- seu container da lista
+  lista.innerHTML = "Carregando...";
+
+  const snap = await getDocs(collection(db, "empresas"));
+
+  if (snap.empty) {
+    lista.innerHTML = "Nenhuma empresa cadastrada ainda.";
+    return;
+  }
+
+  lista.innerHTML = "";
+  snap.forEach((docu) => {
+    const e = docu.data();
+    const div = document.createElement("div");
+    div.textContent = `${e.nomeEmpresa ?? "(sem nome)"} - ID: ${docu.id}`;
+    lista.appendChild(div);
+  });
+}
+
 
 async function carregarEmpresasPublicasFirestore() {
   const sel = document.getElementById("pubOcEmpresa");
   if (!sel) return;
 
   try {
-    let lista = await garantirListaEmpresas();
-    lista = (lista || []).map(e => String(e || "").trim().toUpperCase()).filter(Boolean);
+    // ✅ GARANTE LOGIN ANÔNIMO ANTES DE LER O FIRESTORE
+    await ensureAuth();
+
+    let lista = await garantirListaEmpresas(); // [{id,nome}] ou ["EMP1"]
+
+    // normaliza para [{id,nome}]
+    const norm = (lista || [])
+      .map(e => {
+        if (typeof e === "string") {
+          const id = e.trim().toUpperCase();
+          return { id, nome: id };
+        }
+        const id = String(e?.id || "").trim().toUpperCase();
+        let nome = String(e?.nome || "").trim();
+
+        // ✅ garante o nome bonito da principal
+        if (id === EMPRESA_PRINCIPAL_ID && !nome) nome = EMPRESA_PRINCIPAL_NOME;
+
+
+        return { id, nome: nome || id };
+      })
+      .filter(x => x.id);
 
     sel.innerHTML = `<option value="">Selecione...</option>`;
 
-    // ✅ SEM getDoc por empresa (economiza MUITO)
-    for (const empId of lista) {
-      sel.innerHTML += `<option value="${empId}">${empId}</option>`;
+    norm.forEach(({ id, nome }) => {
+      const opt = document.createElement("option");
+      opt.value = id;
+      opt.textContent = nome; // ✅ nome bonito
+      opt.dataset.nome = nome;
+      sel.appendChild(opt);
+    });
+
+    // (opcional) label embaixo mostrando nome selecionado
+    const lbl = document.getElementById("pubOcEmpresaNome");
+    function atualizarNomeSelecionado() {
+      const opt = sel.options[sel.selectedIndex];
+      const nome = opt?.dataset?.nome || "";
+      if (lbl) lbl.textContent = nome ? `🏢 ${nome}` : "";
     }
+    sel.onchange = atualizarNomeSelecionado;
+    atualizarNomeSelecionado();
 
     const numEl = document.getElementById("pubOcNum");
     if (numEl) numEl.disabled = !sel.value;
 
   } catch (e) {
     console.error("❌ erro carregar empresas públicas:", e);
-    sel.innerHTML = `<option value="">Selecione...</option><option value="STRONDA">STRONDA</option>`;
+
+    // ✅ fallback melhor: já mostra EMPRESA_PRINCIPAL_ID em vez de EMPRESA_PRINCIPAL_ID
+    sel.innerHTML = `
+      <option value="">Selecione...</option>
+      <option value="${EMPRESA_PRINCIPAL_ID}">${EMPRESA_PRINCIPAL_NOME}</option>
+    `;
   }
+}
+
+function setRoleUI() {
+  aplicarClassePermissaoBody();
+}
+
+
+
+
+function loginsRef() {
+  return doc(db, "config", "logins");
+}
+
+async function salvarLoginIndex({ user, tipo, empresaId, senha }) {
+  user = String(user || "").trim().toLowerCase();
+  if (!user) return;
+
+  await setDoc(loginsRef(), {
+    atualizadoEm: new Date().toISOString(),
+    usuarios: {
+      [user]: {
+        tipo: String(tipo || "").toUpperCase(),
+        empresaId: String(empresaId || "").toUpperCase(),
+        senha: String(senha || "")
+      }
+    }
+  }, { merge: true });
+}
+
+async function buscarLoginIndex(user) {
+  user = String(user || "").trim().toLowerCase();
+  if (!user) return null;
+
+  const snap = await getDoc(loginsRef());
+  if (!snap.exists()) return null;
+
+  const data = snap.data() || {};
+  const u = data.usuarios?.[user] || null;
+  return u;
 }
 
 
@@ -3807,6 +5054,92 @@ function ligarEventosOcorrenciaPublica() {
     }, 300);
   });
 }
+
+// =======================
+// 🔔 ALERTA DE OCORRÊNCIAS
+// =======================
+function atualizarAlertaOcorrencias() {
+  try {
+    // garante array
+    const lista = Array.isArray(ocorrencias) ? ocorrencias : [];
+
+    // considera "pendente" se NÃO estiver concluída
+    // (aceita vários formatos: concluida, concluído, status, etc.)
+    const pendentes = lista.filter(o => {
+      if (!o) return false;
+
+      // se tiver status textual
+      const st = String(o.status || o.state || "").toUpperCase().trim();
+      if (st) return !(st.includes("CONCL") || st.includes("FINAL") || st.includes("RESOLV"));
+
+      // se tiver boolean de concluído
+      if (typeof o.concluida === "boolean") return !o.concluida;
+      if (typeof o.concluido === "boolean") return !o.concluido;
+
+      // se tiver campo "finalizado"
+      if (typeof o.finalizado === "boolean") return !o.finalizado;
+
+      // default: se não tem nada, conta como pendente
+      return true;
+    });
+
+    const n = pendentes.length;
+
+    // ✅ PISCA 2 BOLINHAS NO BOTÃO "OCORRÊNCIAS"
+const btnOc =
+  document.getElementById("btnOcorrencias") ||
+  document.querySelector("[data-btn='ocorrencias']") ||
+  Array.from(document.querySelectorAll("button, a, div"))
+    .find(el => (el.textContent || "").trim().toUpperCase().includes("OCORRÊNCIAS"));
+
+if (btnOc) {
+  if (n > 0) btnOc.classList.add("tem-alerta");
+  else btnOc.classList.remove("tem-alerta");
+}
+
+
+    // 1) atualiza um badge se existir
+    const badge =
+      document.getElementById("badgeOcorrencias") ||
+      document.querySelector("[data-badge='ocorrencias']") ||
+      document.querySelector(".badge-ocorrencias");
+
+    if (badge) {
+      badge.textContent = n ? String(n) : "";
+      badge.style.display = n ? "inline-flex" : "none";
+    }
+
+    // 2) muda o texto do botão/menu "Ocorrências" se achar
+    // (ajusta os seletores conforme seu HTML)
+    const btn =
+      document.getElementById("btnOcorrencias") ||
+      document.querySelector("[data-btn='ocorrencias']") ||
+      Array.from(document.querySelectorAll("button, a, div"))
+        .find(el => (el.textContent || "").trim().toUpperCase() === "OCORRÊNCIAS");
+
+    if (btn) {
+      // não destrói o texto original se você já usa HTML interno
+      // aqui só adiciona um sufixo simples
+      const base = "Ocorrências";
+      btn.textContent = n ? `${base} (${n})` : base;
+    }
+
+    // 3) opcional: título da aba
+      try {
+  const empId = String(empresaAtualId || EMPRESA_PRINCIPAL_ID).toUpperCase();
+  getNomeBonitoEmpresa(empId).then(nome => {
+    document.title = nome || EMPRESA_PRINCIPAL_NOME;
+  });
+} catch {}
+
+  } catch (e) {
+    console.warn("atualizarAlertaOcorrencias falhou:", e);
+  }
+}
+
+// deixa global (garante que chamadas diretas funcionem)
+window.atualizarAlertaOcorrencias = atualizarAlertaOcorrencias;
+
 
 
 function ligarAutoEstabPorEmpresaENumero({ selId, numId, estabId }) {
@@ -3847,33 +5180,77 @@ function ligarAutoEstabPorEmpresaENumero({ selId, numId, estabId }) {
   numEl.disabled = !sel.value;
 }
 
+// ==========================
+// ✅ FECHAMENTO: modo (DIARIO | MENSAL)
+// ==========================
+window.__fcModo = window.__fcModo || "DIARIO";
+
+window.fcSetModo = function (modo) {
+  window.__fcModo = String(modo || "DIARIO").toUpperCase();
+  renderFechamentoCaixa();
+};
+
+
+window.ligarUIFechamentoCaixa = function () {
+  const ini = document.getElementById("fcIni");
+  const fim = document.getElementById("fcFim");
+  const bDia = document.getElementById("btnFCDiario");
+  const bMes = document.getElementById("btnFCMensal");
+  const bGerar = document.getElementById("btnFCGerar");
+
+  if (!ini || !fim || !bDia || !bMes) return;
+
+  ini.addEventListener("change", renderFechamentoCaixa);
+  fim.addEventListener("change", renderFechamentoCaixa);
+
+  bDia.addEventListener("click", () => window.fcSetModo("DIARIO"));
+  bMes.addEventListener("click", () => window.fcSetModo("MENSAL"));
+
+  if (bGerar) bGerar.addEventListener("click", renderFechamentoCaixa);
+};
+
+// liga 1x só
+window.addEventListener("load", () => {
+  try { window.ligarUIFechamentoCaixa(); } catch (e) { console.log(e); }
+  
+});
+
+
 async function setNomeEmpresa(empId, nomeBonito) {
   empId = String(empId || "").trim().toUpperCase();
   nomeBonito = String(nomeBonito || "").trim();
+  if (!empId || !nomeBonito) return;
 
+  await ensureAuth();
+
+  // 1) salva no DOC da empresa
   const ref = doc(db, "empresas", empId, "dados", "app");
+  await setDoc(ref, { empresaPerfil: { nomeEmpresa: nomeBonito } }, { merge: true });
 
-  await setDoc(ref, {
-    empresaPerfil: { nomeEmpresa: nomeBonito }
-  }, { merge: true });
+  // 2) salva também na lista central (config/empresas)
+  let lista = await garantirListaEmpresas(); // [{id,nome}]
+  const idx = lista.findIndex(e => String(e.id || "").toUpperCase() === empId);
 
-  console.log("✅ Nome atualizado:", empId, "->", nomeBonito);
+  if (idx === -1) lista.push({ id: empId, nome: nomeBonito });
+  else lista[idx].nome = nomeBonito; // ✅ AQUI
 
-  // recarrega o select público
-  try { carregarEmpresasPublicasFirestore(); } catch {}
+  await salvarListaEmpresas(lista);
+  return true;
 }
-
-// expõe pro console (porque é module)
 window.setNomeEmpresa = setNomeEmpresa;
-
 
 
 // =====================
 // ✅ EXPOR FUNÇÕES PRO HTML (porque script.js é type="module")
 // =====================
 Object.assign(window, {
+  arAutoPorNumero,
+  salvarRelogioAtualAdmin,
   exportarDados,
   importarDadosArquivo,
+  salvarLoginIndex,
+  buscarLoginIndex,
+  repararIndiceLoginsDaEmpresa,
   iniciarSincronizacaoFirebase,
   salvarNoFirebase,
   definirEmpresa,
@@ -3930,6 +5307,9 @@ Object.assign(window, {
   mostrarTelaLogin,
   preCadastrarEmpresa,
   setNomeEmpresa,
+  fcSetDiarioHoje,
+  fcSetMensalAtual,
+  renderFechamentoCaixa,
 });
 
 
@@ -3948,8 +5328,6 @@ console.log(typeof window.crAutoPorNumero);
 console.log(typeof window.avisarTodosColaboradores);
 
 
-
-window.fazerLogin = fazerLogin;
 window.toggleSenha = toggleSenha;
 window.mostrarApp = mostrarApp;
 
@@ -3965,46 +5343,595 @@ console.log("OK carregou script");
 console.log("fazerLogin:", typeof window.fazerLogin);
 console.log("abrirWhatsTexto:", typeof window.abrirWhatsTexto);
 
+// ✅ ALIAS: evita crash se você trocar o nome sem querer
+// se alguém chamar carregarSessao(), não quebra o app
+if (typeof window.carregarSessao !== "function") {
+  window.carregarSessao = function () {
+    try {
+      // Se você tiver uma lógica real de "carregar sessão", chame aqui.
+      // Por enquanto: apenas loga e retorna false/true.
+      const ok = !!window.__sessao;
+      console.log("carregarSessao (alias):", ok ? "tem sessão" : "sem sessão");
+      return ok;
+    } catch (e) {
+      console.warn("carregarSessao (alias) falhou:", e);
+      return false;
+    }
+  };
+}
+
+
+
 let __visReconnAt = 0;
 
-window.addEventListener("load", () => {
-  carregarSessao();
 
-  setEmpresaAtual(localStorage.getItem("empresaAtualId") || EMPRESA_PRINCIPAL);
-  carregarDadosUmaVezParaLogin();
+function carregarSessao() {
+  sessaoUsuario = null;
+}
 
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden) {
-      pararSnapshotAtual();
-      return;
-    }
+window.carregarSessao = carregarSessao; // ✅ garante global
 
-    if (__firestoreBloqueado) return;
 
-    const now = Date.now();
-    if (now - __visReconnAt < 3000) return; // ✅ 3s de trava
-    __visReconnAt = now;
 
-    iniciarSincronizacaoFirebase();
-  });
+  // ✅ tem que carregar usuários antes de validar sessão
+  await carregarDadosUmaVezParaLogin();
 
-  // ✅ mantém o resto que você já tinha aqui embaixo:
-  if (sessaoUsuario) {
+  if (validarSessaoPersistida()) {
     mostrarApp();
-    aplicarPermissoesUI();
+    aplicarClassePermissaoBody();
     aplicarPermissoesMenu();
+    aplicarPermissoesUI();
+
+    pararSnapshotAtual();
+    __syncAtivo = false;
+    await iniciarSincronizacaoFirebase();
+
+    try { listarMaquinas(); } catch {}
+    try { atualizarStatus(); } catch {}
+    try { listarOcorrencias(); } catch {}
+    try { atualizarAlertaOcorrencias(); } catch {}
   } else {
     mostrarTelaLogin();
+    aplicarClassePermissaoBody();
     limparCamposLogin();
   }
 
   carregarEmpresasPublicasFirestore();
   ligarEventosOcorrenciaPublica();
+
+
+
+function validarSessaoPersistida() {
+  if (!sessaoUsuario) return false;
+
+  const user = String(sessaoUsuario.user || "").toLowerCase();
+  const tipo = String(sessaoUsuario.tipo || "").toUpperCase();
+  const empAtual  = String(empresaAtualId || "").toUpperCase();
+
+  if (!user || !tipo) return false;
+
+  // ✅ expira sessão em 12h (aqui pode limpar mesmo)
+  const criadoEm = Number(sessaoUsuario.criadoEm || 0);
+  if (criadoEm && (Date.now() - criadoEm) > (12 * 60 * 60 * 1000)) {
+    limparSessao();  // ✅ aqui pode
+    return false;
+  }
+
+  // ✅ acha usuário real NA EMPRESA ATUAL
+  const u = (usuarios || []).find(x =>
+    String(x.user || "").toLowerCase() === user &&
+    String(x.tipo || "").toUpperCase() === tipo
+  );
+
+  // ❌ se não achou usuário nessa empresa, só invalida pra essa empresa
+  if (!u) return false;
+
+  // ✅ MASTER vale em qualquer empresa
+  if (tipo === "MASTER") return true;
+
+  // ✅ ADMIN/COLAB: só vale se for a empresa atual
+  const empUser = String(u.empresaId || "").toUpperCase();
+  if (!empUser || empUser !== empAtual) return false;
+
+  return true;
+}
+
+
+window.adicionarEmpresa = adicionarEmpresa;
+window.voltar = voltar;
+
+
+// ===============================
+// ✅ OCULTAR "CADASTRO/CADASTRAR MÁQUINA" PARA COLAB (GLOBAL + ANTI-REAPARECER)
+// ===============================
+
+function ocultarCadastroMaquinaParaColab() {
+  if (isAdmin()) return; // ADMIN/MASTER vê
+
+  // 1) esconde por seletores conhecidos (menu e telas)
+  const seletores = [
+    "#btnCadastrarMaquina",
+    "#colaboradores #btnCadastrarMaquina",
+    "#colaboradores .btnCadastrarMaquina",
+    "[data-btn='cadastrarMaquina']",
+    "[data-action='cadastrarMaquina']",
+    "[onclick*='cadastroMaquina']",
+    "[onclick*='salvarMaquina']"
+  ];
+
+  document.querySelectorAll(seletores.join(",")).forEach((el) => {
+    el.style.setProperty("display", "none", "important");
+  });
+
+  // 2) fallback por TEXTO (pega variações)
+  const alvos = ["CADASTRO DE MAQUINA", "CADASTRAR MAQUINA"];
+
+  document
+    .querySelectorAll("button, a, [role='button'], .btn, li, div")
+    .forEach((el) => {
+      const t = _normTxt(el.textContent || "");
+      if (alvos.some((x) => t.includes(x))) {
+        el.style.setProperty("display", "none", "important");
+      }
+    });
+}
+
+// ✅ ativa proteção: roda agora + observa mudanças no DOM
+function ativarProtecaoCadastroMaquinaColab() {
+  try { ocultarCadastroMaquinaParaColab(); } catch {}
+
+  // evita criar vários observers
+  if (window.__obsCadMaq) return;
+
+  window.__obsCadMaq = new MutationObserver(() => {
+    // só aplica se for COLAB (economiza processamento)
+    try {
+      if (!isAdmin()) ocultarCadastroMaquinaParaColab();
+    } catch {}
+  });
+
+  window.__obsCadMaq.observe(document.body, {
+    childList: true,
+    subtree: true
+  });
+}
+
+// ✅ opcional: se quiser desligar (debug)
+function desativarProtecaoCadastroMaquinaColab() {
+  try {
+    if (window.__obsCadMaq) {
+      window.__obsCadMaq.disconnect();
+      window.__obsCadMaq = null;
+    }
+    // (opcional) reexibe o botão caso tenha escondido via style
+    const el = document.getElementById("btnCadastrarMaquina");
+    if (el) el.style.removeProperty("display");
+  } catch (e) {
+    console.warn("desativarProtecaoCadastroMaquinaColab falhou:", e);
+  }
+}
+
+// se você precisar chamar pelo HTML:
+window.desativarProtecaoCadastroMaquinaColab = desativarProtecaoCadastroMaquinaColab;
+
+
+// expõe se quiser chamar manualmente
+Object.assign(window, {
+  ocultarCadastroMaquinaParaColab,
+  ativarProtecaoCadastroMaquinaColab,
+  desativarProtecaoCadastroMaquinaColab,
 });
 
 
-// deixa as funções visíveis pro onclick do HTML (porque seu script é type="module")
-window.preCadastrarEmpresa = preCadastrarEmpresa;
-window.adicionarEmpresa = adicionarEmpresa;
-window.voltar = voltar;
+function bindMenuButtons() {
+  const map = [
+    ["btnFechamentoCaixa", "abrirFechamentoCaixa"],
+    ["btnTrocarSenhaAdmin", "trocarSenhaAdmin"],
+    ["btnTrocarCredenciaisAdmin", "trocarCredenciaisAdmin"],
+    ["btnColaboradores", "abrirColaboradores"]
+  ];
+
+  map.forEach(([id, fn]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    el.onclick = (ev) => {
+      ev.preventDefault();
+
+      const f = window[fn];
+      if (typeof f !== "function") {
+        console.error(`❌ Função ${fn} não existe no window.`);
+        alert(`❌ Botão "${id}" não está ligado. Função "${fn}" não encontrada.`);
+        return;
+      }
+
+      try {
+        f();
+      } catch (e) {
+        console.error(`❌ Erro ao executar ${fn}:`, e);
+        alert(`❌ Erro ao abrir: ${fn}\n\n` + (e?.message || e));
+      }
+    };
+  });
+}
+
+// garante depois do DOM pronto
+window.addEventListener("load", () => {
+  bindMenuButtons();
+});
+
+
+// ✅ GARANTE: função que faltava (Colaboradores)
+function abrirColaboradores() {
+  if (!exigirAdmin()) return;
+  abrir("colaboradores");
+  try { listarColaboradores(); } catch(e) { console.log(e); }
+}
+window.abrirColaboradores = abrirColaboradores;
+
+
+// ✅ SUPER BIND (delegação) - nunca mais “botão não funciona”
+document.addEventListener("click", (ev) => {
+  const el = ev.target.closest(
+    "#btnFechamentoCaixa,#btnTrocarSenhaAdmin,#btnTrocarCredenciaisAdmin,#btnColaboradores"
+  );
+  if (!el) return;
+
+  ev.preventDefault();
+  ev.stopPropagation();
+
+  const map = {
+    btnFechamentoCaixa: "abrirFechamentoCaixa",
+    btnTrocarSenhaAdmin: "trocarSenhaAdmin",
+    btnTrocarCredenciaisAdmin: "trocarCredenciaisAdmin",
+    btnColaboradores: "abrirColaboradores",
+  };
+
+  const fnName = map[el.id];
+  const fn = window[fnName];
+
+  console.log("✅ Clique:", el.id, "->", fnName, "tipo:", typeof fn);
+
+  if (typeof fn !== "function") {
+    alert(`❌ Função ${fnName} não está disponível no window.`);
+    return;
+  }
+
+  try {
+    fn();
+  } catch (e) {
+    console.error(`❌ Erro em ${fnName}:`, e);
+    alert(`❌ Erro ao executar ${fnName}\n\n` + (e?.message || e));
+  }
+});
+
+
+
+function ligarUIFechamentoCaixa() {
+  const ini = document.getElementById("fcIni");
+  const fim = document.getElementById("fcFim");
+  const bDia = document.getElementById("btnFCDiario");
+  const bMes = document.getElementById("btnFCMensal");
+  const bGerar = document.getElementById("btnFCGerar");
+
+  if (!ini || !fim || !bDia || !bMes || !bGerar) return;
+
+  ini.addEventListener("change", renderFechamentoCaixa);
+  fim.addEventListener("change", renderFechamentoCaixa);
+
+  bDia.addEventListener("click", () => fcSetModo("DIARIO"));
+  bMes.addEventListener("click", () => fcSetModo("MENSAL"));
+
+  bGerar.addEventListener("click", renderFechamentoCaixa);
+}
+
+
+
+window.toggleSenha = toggleSenha;
+
+
+async function migrarEmpresaId(oldId, newId) {
+  oldId = String(oldId || "").trim().toUpperCase();
+  newId = String(newId || "").trim().toUpperCase();
+  if (!oldId || !newId) return alert("IDs inválidos.");
+  if (oldId === newId) return alert("Old e New são iguais.");
+
+  await ensureAuth();
+
+  const oldRef = doc(db, "empresas", oldId, "dados", "app");
+  const newRef = doc(db, "empresas", newId, "dados", "app");
+
+  const oldSnap = await getDoc(oldRef);
+  if (!oldSnap.exists()) return alert("Empresa antiga não existe: " + oldId);
+
+  const data = oldSnap.data() || {};
+
+  // grava no novo ID
+  await setDoc(newRef, {
+    ...data,
+    atualizadoEm: new Date().toISOString(),
+    empresaPerfil: {
+      ...(data.empresaPerfil || {}),
+      nomeEmpresa: "EMPRESA_PRINCIPAL_ID"
+    }
+  });
+
+  // atualiza lista central (config/empresas)
+  let lista = await garantirListaEmpresas();
+  // remove old
+  lista = lista.filter(e => String(e.id || "").toUpperCase() !== oldId);
+  // adiciona new
+  if (!lista.some(e => String(e.id || "").toUpperCase() === newId)) {
+    lista.push({ id: newId, nome: "EMPRESA_PRINCIPAL_ID" });
+  } else {
+    lista = lista.map(e => String(e.id||"").toUpperCase() === newId ? { id:newId, nome:"EMPRESA_PRINCIPAL_ID" } : e);
+  }
+  await salvarListaEmpresas(lista);
+
+  // atualiza logins no índice central (config/logins)
+  // (troca empresaId de quem era oldId)
+  const logSnap = await getDoc(loginsRef());
+  if (logSnap.exists()) {
+    const logData = logSnap.data() || {};
+    const users = logData.usuarios || {};
+    const updates = {};
+
+    for (const [user, info] of Object.entries(users)) {
+      if (String(info?.empresaId || "").toUpperCase() === oldId) {
+        updates[user] = { ...info, empresaId: newId };
+      }
+    }
+
+    if (Object.keys(updates).length) {
+      await setDoc(loginsRef(), {
+        atualizadoEm: new Date().toISOString(),
+        usuarios: updates
+      }, { merge: true });
+    }
+  }
+
+  // opcional: apagar antiga
+  // await deleteDoc(oldRef);
+
+  localStorage.setItem("empresaAtualId", newId);
+
+  alert(`✅ Migração concluída!\n${oldId} → ${newId}\n\nAgora recarregue a página.`);
+}
+window.migrarEmpresaId = migrarEmpresaId;
+
+
+function debugColabs() {
+  try {
+    const emp = String(empresaAtualId || "").toUpperCase();
+    const lista = listarColaboradoresComWhats(); // já normaliza e filtra
+    console.log("=== DEBUG COLABS ===");
+    console.log("empresaAtualId:", emp);
+    console.log("total usuarios:", (usuarios || []).length);
+    console.table(
+      (usuarios || [])
+        .filter(u => String(u.tipo || "").toUpperCase() === "COLAB")
+        .map(u => ({
+          nome: u.nome,
+          user: u.user,
+          empresaId: u.empresaId,
+          whats_raw: u.whats,
+          whats_norm: normalizarWhats(u.whats),
+          ok_whats: !!normalizarWhats(u.whats)
+        }))
+    );
+
+    console.log("colabs com whats válido (da empresa atual):", lista.length);
+    console.table(lista.map(c => ({
+      nome: c.nome,
+      user: c.user,
+      empresaId: c.empresaId,
+      whats: c.whats
+    })));
+
+    alert(`✅ Debug Colabs\nEmpresa: ${emp}\nColabs com Whats válido: ${lista.length}`);
+  } catch (e) {
+    console.error("debugColabs erro:", e);
+    alert("❌ debugColabs falhou: " + (e?.message || e));
+  }
+}
+
+window.debugColabs = debugColabs;
+
+
+console.log("OK carregou script");
+console.log("fazerLogin:", typeof window.fazerLogin);
+console.log("abrirWhatsTexto:", typeof window.abrirWhatsTexto);
+
+// ✅ ALIAS: evita crash se você trocar o nome sem querer
+if (typeof window.carregarSessao !== "function") {
+  window.carregarSessao = function () {
+    try {
+      const ok = !!window.__sessao;
+      console.log("carregarSessao (alias):", ok ? "tem sessão" : "sem sessão");
+      return ok;
+    } catch (e) {
+      console.warn("carregarSessao (alias) falhou:", e);
+      return false;
+    }
+  };
+}
+
+
+
+window.preCadastrarEmpresa = async function () {
+  const btn = document.getElementById("btnCadastrarEmpresa");
+  if (btn) btn.disabled = true;
+
+  try {
+    const empresaId = document.getElementById("pcEmpId").value.trim().toUpperCase();
+    const nomeEmpresa = document.getElementById("pcNomeEmpresa").value.trim();
+    const docCpfCnpj = document.getElementById("pcDoc").value.trim();
+    const adminNome = document.getElementById("pcAdminNome").value.trim();
+    const adminUser = document.getElementById("pcAdminUser").value.trim();
+    const adminSenha = document.getElementById("pcAdminSenha").value.trim();
+    const diaPagamento = Number(document.getElementById("pcDiaPagamento").value);
+
+    // validações
+    if (!empresaId) throw new Error("Preencha o Empresa ID.");
+    if (!nomeEmpresa) throw new Error("Preencha o Nome da empresa.");
+    if (!adminNome) throw new Error("Preencha o Nome do ADMIN.");
+    if (!adminUser) throw new Error("Preencha o Usuário do ADMIN.");
+    if (!adminSenha || adminSenha.length < 4) throw new Error("Senha do ADMIN precisa ter no mínimo 4 caracteres.");
+    if (!Number.isInteger(diaPagamento) || diaPagamento < 1 || diaPagamento > 28) {
+      throw new Error("Dia de pagamento deve ser entre 1 e 28.");
+    }
+
+    // salva no Firestore
+    await setDoc(doc(db, "empresas", empresaId), {
+      empresaId,
+      nomeEmpresa,
+      docCpfCnpj: docCpfCnpj || null,
+      diaPagamento,
+      admin: {
+        nome: adminNome,
+        usuario: adminUser,
+        senha: adminSenha // ⚠️ só pra teste; ideal é usar Firebase Auth
+      },
+      criadoEm: serverTimestamp()
+    }, { merge: true });
+
+    alert("✅ Empresa cadastrada com sucesso!");
+
+    // limpa campos
+    document.getElementById("pcEmpId").value = "";
+    document.getElementById("pcNomeEmpresa").value = "";
+    document.getElementById("pcDoc").value = "";
+    document.getElementById("pcAdminNome").value = "";
+    document.getElementById("pcAdminUser").value = "";
+    document.getElementById("pcAdminSenha").value = "";
+    document.getElementById("pcDiaPagamento").value = 5;
+
+  } catch (err) {
+    console.error("❌ ERRO ao cadastrar empresa:", err);
+    alert(err?.message || "Erro ao cadastrar empresa. Veja o console (F12).");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+};
+
+
+
+window.addEventListener("load", () => {
+  try {
+    // garante empresa atual logo no começo
+    if (!empresaAtualId) {
+      const emp = localStorage.getItem("empresaAtualId") || EMPRESA_PRINCIPAL_ID;
+      setEmpresaAtual(emp);
+    }
+
+    atualizarNomeEmpresaNaTela().catch(console.error);
+  } catch (e) {
+    console.error("Falha ao setar nome no topo:", e);
+  }
+});
+
+
+
+console.count("📦 script.js avaliou");
+
+async function main() {
+  console.count("✅ main() chamado");
+  console.trace("📌 quem chamou main()");
+  // 1) Firebase config
+  const firebaseConfig = {
+    
+    apiKey: "AIzaSyDwKkCtERVgvOsmEH1X_T1gqn66bDRHsYo",
+    authDomain: "stronda-music-controle.firebaseapp.com",
+    projectId: "stronda-music-controle",
+    storageBucket: "stronda-music-controle.firebasestorage.app",
+    messagingSenderId: "339385914034",
+    appId: "1:339385914034:web:601d747b7151d507ad6fab"
+  };
+
+  // ✅ Inicialização segura (não duplica app)
+  const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+
+  console.log("Firebase apps:", getApps().length);
+  console.log("apiKey em uso:", app.options.apiKey);
+  console.log("config completo:", app.options);
+
+  // services
+  const db = getFirestore(app);
+  const auth = getAuth(app);
+
+  // ✅ se você quer usar no console
+  window.__db = db;
+
+  // =====================
+  // ✅ EMPRESA PRINCIPAL
+  // =====================
+  const EMPRESA_PRINCIPAL_ID   = "STRONDA-MUSIC";  // ID do Firestore
+  const EMPRESA_PRINCIPAL_NOME = "STRONDA MUSIC";  // Nome pra exibir
+  const EMPRESA_PRINCIPAL      = EMPRESA_PRINCIPAL_ID;
+
+  // ✅ A PARTIR DAQUI: cola o resto do seu código
+  // ⚠️ Só troca: onde você usava db/auth globais, agora eles existem aqui dentro.
+  // Se o seu código depende de db/auth em outras funções fora do main,
+  // você pode fazer:
+  window.db = db;
+  window.auth = auth;
+
+  // ... (cole seu resto aqui)
+}
+
+// ✅ BOOT ÚNICO (não duplica, não briga)
+document.addEventListener("DOMContentLoaded", async () => {
+  try {
+    console.log("🚀 BOOT ÚNICO: start");
+
+    // 1) define empresa atual cedo
+    const emp = localStorage.getItem("empresaAtualId") || EMPRESA_PRINCIPAL_ID;
+    setEmpresaAtual(emp);
+
+    // 2) mostra tela de login inicialmente (evita tela travada)
+    try { mostrarTelaLogin(); } catch {}
+
+    // 3) garante Firebase + auth + dados mínimos (isso que destrava o app)
+    await iniciarSincronizacaoFirebase();
+
+    // 4) atualiza nome da empresa no topo (se existir)
+    try { await atualizarNomeEmpresaNaTela?.(); } catch {}
+
+    // 5) carrega empresas no select público e liga eventos (se existir)
+    try { await carregarEmpresasPublicasFirestore?.(); } catch {}
+    try { ligarEventosOcorrenciaPublica?.(); } catch {}
+
+    // 6) se tiver sessão válida, entra no app
+    try {
+      if (typeof validarSessaoPersistida === "function" && validarSessaoPersistida()) {
+        mostrarApp();
+        aplicarClassePermissaoBody?.();
+        aplicarPermissoesMenu?.();
+        aplicarPermissoesUI?.();
+
+        try { listarMaquinas?.(); } catch {}
+        try { atualizarStatus?.(); } catch {}
+        try { listarOcorrencias?.(); } catch {}
+        try { atualizarAlertaOcorrencias?.(); } catch {}
+      } else {
+        // sem sessão -> fica no login e garante botão OK
+        habilitarBotaoLogin?.();
+      }
+    } catch (e) {
+      console.warn("⚠️ sessão/permissões falhou:", e);
+      habilitarBotaoLogin?.();
+    }
+
+    console.log("✅ BOOT ÚNICO: pronto");
+  } catch (e) {
+    console.error("❌ BOOT ÚNICO falhou:", e);
+    // fallback: não deixa travar
+    try { habilitarBotaoLogin(); } catch {}
+  }
+});
+
+
+
+window.entrarLogin = (tipo) => entrarLogin(tipo);
+
 

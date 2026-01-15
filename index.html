@@ -7,8 +7,44 @@
   <link rel="stylesheet" href="style.css" />
   <link rel="icon" href="data:,">
 
+<style>
+/* por padrão, esses botões ficam escondidos */
+#btnTrocarSenhaAdmin,
+#btnColaboradores,
+#btnSelecionarEmpresa,
+#btnVoltarStronda,
+#btnAtualizarRelogio,
+#btnCreditosRemotos,
+#btnFechamentoCaixa,
+#btnTrocarCredenciaisMaster {
+  display: none !important;
+}
+
+/* quando o app recebe classe admin, libera */
+body.is-admin #btnTrocarSenhaAdmin,
+body.is-admin #btnColaboradores,
+body.is-admin #btnAtualizarRelogio,
+body.is-admin #btnCreditosRemotos,
+body.is-admin #btnFechamentoCaixa {
+  display: block !important;
+}
+
+/* quando for master, libera master */
+body.is-master #btnSelecionarEmpresa,
+body.is-master #btnVoltarStronda,
+body.is-master #btnTrocarCredenciaisMaster {
+  display: block !important;
+}
+</style>
+
+
+
 </head>
 <body>
+
+
+
+
 
 <!-- TELA LOGIN (aparece primeiro) -->
 <div id="telaLogin" class="box">
@@ -37,7 +73,7 @@
       <button type="button" class="btn-olho" onclick="toggleSenha('loginSenha', this)">👁️</button>
     </div>
 
-    <button id="btnEntrar" type="button" onclick="entrarLogin(document.getElementById('tipoLogin').value)">Entrar</button>
+    <button id="btnEntrar" onclick="window.entrarLogin(document.getElementById('tipoLogin').value)">Entrar</button>
 
 
     <hr style="opacity:.2; margin:16px 0;">
@@ -79,18 +115,49 @@
   <button onclick="abrir('cadastro')">➕ Cadastro de Máquina</button>
   <button onclick="abrir('clientes')">👥 Máquinas Cadastradas</button>
   <button id="btnOcorrencias" onclick="abrir('ocorrencias')">🛠 Ocorrências</button>
-  <button id="btnCreditosRemotos" onclick="abrir('creditosRemotos')">
+  <button id="btnCreditosRemotos" onclick="abrirCreditosRemotos()">
   💳 Créditos Remotos
 </button>
-  <button onclick="abrirHistoricoVendas()">📊 Fechamento de Caixa</button>
+<button id="btnAtualizarRelogio" type="button" onclick="abrir('atualizarRelogio')">
+  ⏱️ Atualizar Relógio
+</button>
+<button id="btnFechamentoCaixa" onclick="abrir('fechamentoCaixa')">📊 Fechamento de Caixa</button>
   <button id="btnSelecionarEmpresa" onclick="abrir('selecionarEmpresa')">
   🏢 Selecionar Empresa
 </button>
-  <button onclick="trocarSenhaAdmin()">🔐 Trocar Senha (ADMIN)</button>
-  <button onclick="abrir('colaboradores')">👤 Colaboradores</button>
+<button id="btnVoltarStronda" type="button" onclick="voltarParaStronda()">
+  🏠 Voltar pra STRONDA
+</button>
+  <button id="btnTrocarSenhaAdmin" class="btn">🔒 Trocar Senha (ADMIN)</button>
+  <button id="btnTrocarCredenciaisMaster" type="button" class="btn" onclick="trocarCredenciaisMaster()">
+  🔑 Trocar senha administrador (MASTER)
+</button>
+
+  <button id="btnColaboradores" class="btn">👥 Colaboradores</button>
   <button onclick="sair()">🚪 Sair</button>
 </div>
 
+<!-- botao de atualizar relogio -->
+
+<section class="box escondido" id="atualizarRelogio">
+  <h2>⏱️ Atualizar Relógio (ADMIN)</h2>
+
+  <label>Nº da Jukebox</label>
+  <input id="arNum" type="text" placeholder="Ex: 001" oninput="arAutoPorNumero()">
+
+  <label>Estabelecimento</label>
+  <input id="arEstab" type="text" disabled>
+
+  <label>Cliente</label>
+  <input id="arCliente" type="text" disabled>
+
+  <label>Relógio Atual (R$)</label>
+  <input id="arRelogioAtual" type="number" step="0.01" placeholder="Ex: 1250.50">
+
+  <button type="button" onclick="salvarRelogioAtualAdmin()">✅ Salvar Relógio</button>
+
+  <button type="button" style="margin-top:10px;" onclick="voltar()">⬅ Voltar</button>
+</section>
 
     <!-- ACERTO -->
 <div id="acerto" class="box escondido" autocomplete="off">
@@ -178,6 +245,46 @@
       <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
     </div>
 
+
+  <!-- FECHAMENTO DE CAIXA (ADMIN) -->
+<section class="box escondido" id="fechamentoCaixa">
+  <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+  <h2>📊 Fechamento de Caixa (Empresa)</h2>
+
+  <!-- BOTÕES: DIÁRIO / MENSAL -->
+  <div style="display:flex; gap:10px; flex-wrap:wrap; margin:10px 0;">
+    <button id="btnFCDiario" type="button" style="flex:1; padding:12px; border-radius:12px; font-weight:900;">
+      📅 Diário
+    </button>
+
+    <button id="btnFCMensal" type="button" style="flex:1; padding:12px; border-radius:12px; font-weight:900;">
+      🗓️ Mensal
+    </button>
+  </div>
+
+  <!-- PERÍODO (em cima) -->
+  <div style="display:flex; gap:10px; flex-wrap:wrap; margin:10px 0;">
+    <div style="flex:1; min-width:140px;">
+      <label>Data inicial</label>
+      <input id="fcIni" type="date" style="width:100%; padding:10px; border-radius:10px;">
+    </div>
+
+    <div style="flex:1; min-width:140px;">
+      <label>Data final</label>
+      <input id="fcFim" type="date" style="width:100%; padding:10px; border-radius:10px;">
+    </div>
+
+    <button id="btnFCGerar" type="button" style="height:42px; align-self:flex-end;">
+      🔄 Gerar
+    </button>
+  </div>
+
+  <div id="fcResumo" style="margin-top:12px;"></div>
+  <div id="fcLista" style="margin-top:12px;"></div>
+</section>
+
+
+
     <!-- DETALHE DA MÁQUINA -->
     <div id="detalheMaquina" class="box escondido">
       <h2 id="tituloMaquina">🔧 Máquina</h2>
@@ -253,7 +360,6 @@
 </div>
 
 <!-- SELECIONAR EMPRESA (ADMIN) -->
-<!-- SELECIONAR EMPRESA (ADMIN) -->
 <div id="selecionarEmpresa" class="box escondido">
   <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
   <h2>🏢 Empresas</h2>
@@ -284,10 +390,12 @@
     <label>Dia de pagamento (1 a 28) *</label>
     <input id="pcDiaPagamento" type="number" min="1" max="28" value="5" />
 
-    <button id="btnCadastrarEmpresa" type="button" onclick="preCadastrarEmpresa()"
-  style="margin-top:10px; width:100%; padding:12px; border-radius:12px; border:none; font-weight:900; cursor:pointer;">
-  ✅ Cadastrar Empresa
+    <button type="button" onclick="preCadastrarEmpresa()">
+  ➕ Cadastrar Empresa
 </button>
+
+
+
 
   </div>
 
