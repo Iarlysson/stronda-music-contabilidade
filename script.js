@@ -6572,12 +6572,21 @@ async function listarEmpresasUI() {
     li.style.background = "#0f172a";
     li.style.marginTop = "8px";
 
+    // ✅ Selecionar
     const btnSel = document.createElement("button");
     btnSel.type = "button";
     btnSel.textContent = `✅ Selecionar ${nome}`;
     btnSel.style.flex = "1";
     btnSel.onclick = () => selecionarEmpresa(empId);
 
+    // ✅ Editar
+    const btnEdit = document.createElement("button");
+    btnEdit.type = "button";
+    btnEdit.textContent = "✏️";
+    btnEdit.style.width = "60px";
+    btnEdit.onclick = () => abrirEdicaoEmpresa(empId, nome);
+
+    // ✅ Apagar (com senha MASTER)
     const btnDel = document.createElement("button");
     btnDel.type = "button";
     btnDel.textContent = "🗑";
@@ -6587,7 +6596,16 @@ async function listarEmpresasUI() {
       pararSnapshotAtual();
 
       try {
-        if (!confirm(`Apagar a empresa ${nome} (${empId})?`)) return;
+        const senha = prompt("🔐 Digite a senha do MASTER para apagar esta empresa:");
+        if (senha === null) return;
+
+        const ok = await confirmarSenhaMasterDigitada(senha);
+        if (!ok) {
+          alert("❌ Senha do MASTER incorreta.");
+          return;
+        }
+
+        if (!confirm(`Apagar a empresa ${nome} (${empId})? Essa ação não tem volta.`)) return;
 
         li.remove();
 
@@ -6603,7 +6621,7 @@ async function listarEmpresasUI() {
         console.error(e);
         try { await listarEmpresasUI(); } catch {}
 
-        if (String(e?.code || "").includes("resource-exhausted") || /quota/i.test(String(e?.message||""))) {
+        if (String(e?.code || "").includes("resource-exhausted") || /quota/i.test(String(e?.message || ""))) {
           alert("❌ Firestore estourou a quota agora. Reduza leituras/gravações.");
         } else {
           alert("❌ Não consegui apagar.\n\n" + (e?.message || e));
@@ -6612,20 +6630,40 @@ async function listarEmpresasUI() {
     };
 
     li.appendChild(btnSel);
-
-const btnEdit = document.createElement("button");
-btnEdit.type = "button";
-btnEdit.textContent = "✏️";
-btnEdit.style.width = "60px";
-btnEdit.onclick = () => abrirEdicaoEmpresa(empId, nome);
-li.appendChild(btnEdit);
-
-li.appendChild(btnDel);
-ul.appendChild(li);
-
+    li.appendChild(btnEdit);
+    li.appendChild(btnDel);
+    ul.appendChild(li);
   });
 }
 
+async function confirmarSenhaMasterDigitada(senhaDigitada) {
+  const empMaster =
+    (window.sessaoUsuario && window.sessaoUsuario.empresaId) ||
+    (window.sessao && window.sessao.empresaId) ||
+    (window.usuarioSessao && window.usuarioSessao.empresaId) ||
+    "STRONDA-MUSIC";
+
+  const userMaster =
+    (window.sessaoUsuario && window.sessaoUsuario.user) ||
+    (window.sessao && window.sessao.user) ||
+    (window.usuarioSessao && window.usuarioSessao.user) ||
+    "strondamusic";
+
+  const ref = doc(db, "empresas", empMaster, "dados", "app");
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return false;
+
+  const data = snap.data() || {};
+  const usuarios = Array.isArray(data.usuarios) ? data.usuarios : [];
+
+  // acha o usuário MASTER pelo login
+  const u = usuarios.find(x => String(x?.user || x?.usuario || "").toLowerCase() === String(userMaster).toLowerCase());
+  const senhaReal = String(u?.senha || u?.pass || u?.password || "").trim();
+
+  console.log("VALIDAR MASTER VIA usuarios[] -> emp:", empMaster, "user:", userMaster, "achou:", !!u, "senhaExiste:", !!senhaReal);
+
+  return senhaReal && String(senhaDigitada || "").trim() === senhaReal;
+}
 
 
 async function abrirEdicaoEmpresa(empId, nomeFallback) {
