@@ -4,8 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Stronda Music</title>
+  <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+  <link rel="apple-touch-icon" href="icon-512.png">
   <link rel="stylesheet" href="style.css" />
-  <link rel="icon" href="data:,">
+
 
 <style>
 /* por padrão, esses botões ficam escondidos */
@@ -110,31 +112,34 @@ body.is-master #btnTrocarCredenciaisMaster {
 
     <!-- MENU -->
 <div id="menu" class="menu">
-  <button onclick="abrir('acerto')">⚡ Acerto</button>
-  <button onclick="abrir('status')">🟢 Status</button>
-  <button onclick="abrir('cadastro')">➕ Cadastro de Máquina</button>
-  <button onclick="abrir('clientes')">👥 Máquinas Cadastradas</button>
-  <button id="btnOcorrencias" onclick="abrir('ocorrencias')">🛠 Ocorrências</button>
+  <button onclick="abrir('acerto')">⚡ Acerto ⚡</button>
+  <button onclick="abrir('status')">🟢 Status 🔴</button>
+  <button id="btnCadastrarMaquina" onclick="abrir('cadastro')">➕ Cadastrar Máquina ➕</button>
+  <button onclick="abrirMaquinasCadastradas()">👥 Máquinas Cadastradas 👥</button>
+  <button id="btnMaquinasDeposito" style="display:none" onclick="abrirMaquinasDeposito()">
+  🏬 Máquinas Depósito 🏬
+</button>
+  <button id="btnOcorrencias" onclick="abrir('ocorrencias')">🛠 Ocorrências 🛠</button>
   <button id="btnCreditosRemotos" onclick="abrirCreditosRemotos()">
-  💳 Créditos Remotos
+  💳 Créditos Remotos 💳
 </button>
 <button id="btnAtualizarRelogio" type="button" onclick="abrir('atualizarRelogio')">
-  ⏱️ Atualizar Relógio
+  ⏱️ Atualizar Relógio ⏱️
 </button>
-<button id="btnFechamentoCaixa" onclick="abrir('fechamentoCaixa')">📊 Fechamento de Caixa</button>
+<button id="btnFechamentoCaixa" onclick="abrir('fechamentoCaixa')">📊 Fechamento de Caixa 📊</button>
   <button id="btnSelecionarEmpresa" onclick="abrir('selecionarEmpresa')">
-  🏢 Selecionar Empresa
+  🏢 Selecionar Empresa 🏢
 </button>
 <button id="btnVoltarStronda" type="button" onclick="voltarParaStronda()">
-  🏠 Voltar pra STRONDA
+  🏠 Voltar pra STRONDA 🏠
 </button>
-  <button id="btnTrocarSenhaAdmin" class="btn">🔒 Trocar Senha (ADMIN)</button>
+  <button id="btnTrocarSenhaAdmin" class="btn">🔒 Trocar Senha (ADMIN) 🔒</button>
   <button id="btnTrocarCredenciaisMaster" type="button" class="btn" onclick="trocarCredenciaisMaster()">
-  🔑 Trocar senha administrador (MASTER)
+  🔑 Trocar senha administrador (MASTER) 🔑
 </button>
 
-  <button id="btnColaboradores" class="btn">👥 Colaboradores</button>
-  <button onclick="sair()">🚪 Sair</button>
+  <button id="btnColaboradores" class="btn">👥 Colaboradores 👥</button>
+  <button onclick="sair()">🚪 Sair 🚪</button>
 </div>
 
 <!-- botao de atualizar relogio -->
@@ -151,8 +156,8 @@ body.is-master #btnTrocarCredenciaisMaster {
   <label>Cliente</label>
   <input id="arCliente" type="text" disabled>
 
-  <label>Relógio Atual (R$)</label>
-  <input id="arRelogioAtual" type="number" step="0.01" placeholder="Ex: 1250.50">
+  <label>Relógio Atual</label>
+  <input id="arRelogioAtual" type="number" step="0.01" placeholder="Ex: 1250">
 
   <button type="button" onclick="salvarRelogioAtualAdmin()">✅ Salvar Relógio</button>
 
@@ -162,7 +167,7 @@ body.is-master #btnTrocarCredenciaisMaster {
     <!-- ACERTO -->
 <div id="acerto" class="box escondido" autocomplete="off">
   <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
-  <h2>⚡ Acerto Rápido</h2>
+  <h2>⚡ Acerto ⚡</h2>
 
   <label>Número da Jukebox</label>
   <input type="text" id="numAcerto" autocomplete="off" oninput="autoPorNumero()">
@@ -211,36 +216,19 @@ body.is-master #btnTrocarCredenciaisMaster {
     </div>
 
     <!-- CADASTRO -->
-    <div id="cadastro" class="box escondido">
-      <h2>➕ Cadastro de Máquina</h2>
+<div id="cadastro" class="box escondido">
+  <h2>➕ Cadastro de Máquina</h2>
 
-      <label>Número da Jukebox</label>
-      <input id="numMaquina" type="text">
+  <label>Número da Jukebox</label>
+  <input id="numMaquina" type="text" autocomplete="off" inputmode="numeric" placeholder="Ex: 001">
 
-      <label>Nome do Estabelecimento</label>
-      <input id="nomeEstab" type="text">
-
-      <label>Nome do Cliente</label>
-      <input id="nomeCliente" type="text">
-
-      <label>Telefone (com DDD)</label>
-      <input id="foneCliente" type="text" placeholder="(61) 99999-9999" inputmode="numeric">
-
-      <label>Endereço / Localização</label>
-      <input id="endereco" type="text">
-
-      <button type="button" onclick="pegarLocalizacaoCadastro()">📍 Pegar Localização (GPS)</button>
-
-      <label>% base do cliente</label>
-      <input id="porcBase" type="number">
-
-      <button onclick="salvarMaquina()">Salvar Máquina</button>
-      <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar ao Menu</button>
-    </div>
+  <button type="button" onclick="salvarMaquina()">Salvar</button>
+  <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar ao Menu</button>
+</div>
 
     <!-- CLIENTES -->
     <div id="clientes" class="box escondido">
-      <h2>👥 Máquinas Cadastradas</h2>
+      <h2 id="tituloMaquinas">👥 Máquinas Cadastradas</h2>
       <ul id="listaMaquinas"></ul>
       <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
     </div>
@@ -281,6 +269,35 @@ body.is-master #btnTrocarCredenciaisMaster {
 
   <div id="fcResumo" style="margin-top:12px;"></div>
   <div id="fcLista" style="margin-top:12px;"></div>
+  <div id="modalEditarPctFC" class="modal-backdrop" style="display:none;">
+  <div class="modal">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <div style="font-weight:900;">✏️ Editar % do Cliente</div>
+      <button type="button" id="btnFecharModalPctFC" class="btn">✖</button>
+    </div>
+
+    <div style="margin-top:10px; font-weight:900;" id="pctFcEstab">Estab:</div>
+    <div style="margin-top:6px;" id="pctFcPeriodo">Período:</div>
+
+    <hr style="margin:12px 0; opacity:.2;">
+
+    <label>% do Cliente</label>
+    <input id="pctFcNovo" type="number" step="0.01" min="0" max="100" class="inp">
+
+    <div style="margin-top:12px;">
+      <div>Total: <span id="pctFcTotal"></span></div>
+      <div>Empresa: <span id="pctFcEmpresa"></span></div>
+      <div>A repassar: <span id="pctFcRepassar"></span></div>
+      <div>A recolher: <span id="pctFcRecolher"></span></div>
+    </div>
+
+    <div style="margin-top:14px; text-align:right;">
+      <button type="button" id="btnCancelarModalPctFC" class="btn">Cancelar</button>
+      <button type="button" id="btnSalvarModalPctFC" class="btn btnPrimary">Salvar</button>
+    </div>
+  </div>
+</div>
+
 </section>
 
 
@@ -301,6 +318,19 @@ body.is-master #btnTrocarCredenciaisMaster {
       <label>Telefone (com DDD)</label>
       <input id="detFone" type="text" placeholder="(61) 99999-9999" inputmode="numeric">
 
+      <label>CPF</label>
+      <input id="detCpf" type="text" placeholder="000.000.000-00" autocomplete="off">
+
+      <label>RG</label>
+      <input id="detRg" type="text" placeholder="Digite o RG" autocomplete="off">
+
+      <small id="erroCpfRgDetalhe" style="display:none; color:#ff6b6b; font-weight:bold;">
+      Preencha CPF ou RG (pelo menos um).
+      </small>
+
+      <label>% base do cliente</label>
+      <input id="detPorcBase" type="number" placeholder="Ex: 30" min="0" max="100" step="0.01">
+
       <div class="acoes-telefone">
         <button type="button" onclick="ligarTelefone()">📞 Ligar</button>
         <button type="button" onclick="abrirWhats(event)">💬 WhatsApp</button>
@@ -310,17 +340,22 @@ body.is-master #btnTrocarCredenciaisMaster {
       <label>Endereço / Localização</label>
       <input id="detEndereco" type="text">
 
-      <button type="button" onclick="atualizarLocalizacaoDetalhe()">
-        📍 Buscar Localização (GPS) (ADMIN)
-      </button>
+     <div class="acoes-telefone">
+  <button id="btnFoto" type="button" onclick="escolherFotoMaquina()">📷 Colocar/Alterar Foto</button>
+  <button id="btnRemoverFoto" type="button" onclick="removerFotoMaquina()">🗑️ Remover Foto</button>
+</div>
 
+
+      <button type="button" onclick="buscarLocalizacaoGPS({ maxAccuracy: 10, timeoutMs: 15000 })">
+  📍 Buscar Localização (GPS)
+</button>
       <label>Status</label>
       <select id="detStatus">
         <option value="ALUGADA">ALUGADA</option>
         <option value="DEPOSITO">DEPÓSITO</option>
       </select>
 
-      <button id="btnSalvar" onclick="salvarAlteracoesMaquina()">Salvar Alterações (ADMIN)</button>
+      <button id="btnSalvar" onclick="salvarAlteracoesMaquina()">Salvar Alterações</button>
       <button id="btnApagar" class="btn-danger" onclick="apagarMaquina()">🗑 Apagar Máquina (ADMIN)</button>
 
       <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar ao Menu</button>
@@ -384,15 +419,26 @@ body.is-master #btnTrocarCredenciaisMaster {
     <label>Usuário do ADMIN *</label>
     <input id="pcAdminUser" placeholder="EX: admin_empresa2" />
 
+  
     <label>Senha do ADMIN *</label>
-    <input id="pcAdminSenha" type="password" placeholder="Mínimo 4 caracteres" />
+<div class="senha-wrapper">
+  <input
+    id="pcAdminSenha"
+    type="password"
+    placeholder="Mínimo 4 caracteres"
+    autocomplete="new-password"
+  >
+  <button
+    type="button"
+    class="btn-olho"
+    onclick="toggleSenha('pcAdminSenha', this)"
+  >👁️</button>
+</div>
 
     <label>Dia de pagamento (1 a 28) *</label>
     <input id="pcDiaPagamento" type="number" min="1" max="28" value="5" />
 
-    <button type="button" onclick="preCadastrarEmpresa()">
-  ➕ Cadastrar Empresa
-</button>
+    <button id="btnPreCadastrarEmpresa" type="button" onclick="preCadastrarEmpresa()">➕ Cadastrar Empresa</button>
 
 
 
@@ -409,7 +455,7 @@ body.is-master #btnTrocarCredenciaisMaster {
     <div id="ocorrencias" class="box escondido">
       <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
 
-      <h2>🛠 Ocorrências</h2>
+      <h2>🛠 Ocorrências 🛠</h2>
 
       
       <label>Número da Máquina</label>
@@ -497,13 +543,24 @@ body.is-master #btnTrocarCredenciaisMaster {
       </div><!-- /#app -->
 
 
+<!-- Firebase (compat) -->
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-storage-compat.js"></script>
 
-<!-- Seu sistema -->
+
+
+<link rel="stylesheet" href="https://unpkg.com/cropperjs@1.6.2/dist/cropper.min.css">
+<script src="https://unpkg.com/cropperjs@1.6.2/dist/cropper.min.js"></script>
+
+
 <script type="module" src="./script.js"></script>
-
 
 
 </body>
 </html>
+
+
 
 

@@ -558,3 +558,102 @@ textarea {
   border: none;
   cursor: pointer;
 }
+
+
+.linha-botoes-foto{
+  display: flex;
+  gap: 10px;
+}
+
+.linha-botoes-foto button{
+  flex: 1;            /* cada um ocupa metade */
+  width: 100%;
+  white-space: nowrap; /* evita quebrar o texto */
+}
+
+.linha-botoes-foto{
+  display: flex !important;
+  gap: 10px !important;
+}
+
+.linha-botoes-foto button{
+  width: auto !important;   /* IMPORTANTE: cancela o width:100% global */
+  flex: 1 1 0 !important;   /* cada um ocupa metade */
+  white-space: nowrap;
+}
+
+
+/* mesma largura/encaixe do bloco Ligar/WhatsApp */
+.linha-botoes-foto{
+  display: flex !important;
+  gap: 10px !important;
+  margin-top: 8px;          /* igual a acoes-telefone */
+}
+
+/* faz os botões ficarem com o mesmo "corpo" do de cima */
+.linha-botoes-foto button{
+  flex: 1 1 0 !important;
+  width: auto !important;
+  padding: 10px !important;     /* igual ao acoes-telefone */
+  border-radius: 6px !important; /* igual ao acoes-telefone */
+  font-weight: bold !important;
+}
+
+.linha-botoes-foto button{
+  font-size: 14px !important;
+  letter-spacing: 0.2px !important;
+  white-space: normal !important; /* permite quebrar em 2 linhas igual no print */
+  line-height: 1.1;
+}
+
+/* deixa o bloco de Foto igual ao de Ligar/WhatsApp */
+#detalheMaquina .acoes-telefone{
+  margin-top: 8px;
+}
+
+/* cores dos botões de Foto */
+#btnFoto{
+  background: #1e90ff;  /* igual Ligar */
+  color: #fff;
+}
+
+#btnRemoverFoto{
+  background: #25D366;  /* igual WhatsApp */
+  color: #fff;
+}
+
+
+/* ===== AUTOCOMPLETE (Ocorrências) ===== */
+.sugestoes{
+  width: 100%;
+  margin-top: 6px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #0f172a;
+  border: 1px solid rgba(255,255,255,.12);
+}
+
+.sugestoes:empty{
+  display: none;
+}
+
+.sug-item{
+  padding: 10px 12px;
+  cursor: pointer;
+  text-align: left;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+}
+
+.sug-item:last-child{
+  border-bottom: none;
+}
+
+.sug-item:hover{
+  background: rgba(255,255,255,.06);
+}
+
+.sug-sub{
+  font-size: 12px;
+  opacity: .75;
+  margin-top: 2px;
+}
