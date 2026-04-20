@@ -112,6 +112,7 @@ body.is-master #btnTrocarCredenciaisMaster {
 
     <!-- MENU -->
 <div id="menu" class="menu">
+  <button id="btnRotas" onclick="abrirTelaRotas()">🗺️ Rota 🗺️</button>
   <button onclick="abrir('acerto')">⚡ Acerto ⚡</button>
   <button onclick="abrir('status')">🟢 Status 🔴</button>
   <button id="btnCadastrarMaquina" onclick="abrir('cadastro')">➕ Cadastrar Máquina ➕</button>
@@ -163,6 +164,29 @@ body.is-master #btnTrocarCredenciaisMaster {
 
   <button type="button" style="margin-top:10px;" onclick="voltar()">⬅ Voltar</button>
 </section>
+
+<div id="rotas" class="box escondido">
+  <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+  <h2>🗺️ Rotas</h2>
+
+  <label>Nova rota</label>
+  <input id="rotaNome" type="text" placeholder="Ex: IACIARA">
+
+  <button type="button" onclick="criarRota()">Salvar Rota</button>
+
+  <hr style="opacity:.2; margin:16px 0;">
+
+  <h3 style="margin:0 0 10px;">📋 Rotas Cadastradas</h3>
+  <ul id="listaRotas"></ul>
+</div>
+
+<div id="rotaDetalhe" class="box escondido">
+  <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+  <h2 id="tituloRotaDetalhe">📍 Rota</h2>
+  <ul id="listaMaquinasRotaDetalhe"></ul>
+</div>
+
+
 
     <!-- ACERTO -->
 <div id="acerto" class="box escondido" autocomplete="off">
@@ -349,6 +373,12 @@ body.is-master #btnTrocarCredenciaisMaster {
       <button type="button" onclick="buscarLocalizacaoGPS({ maxAccuracy: 10, timeoutMs: 15000 })">
   📍 Buscar Localização (GPS)
 </button>
+      
+      <label>Rota</label>
+<select id="detRota">
+  <option value="">SEM ROTA</option>
+</select>
+
       <label>Status</label>
       <select id="detStatus">
         <option value="ALUGADA">ALUGADA</option>

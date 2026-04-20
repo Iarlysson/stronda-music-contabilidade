@@ -655,15 +655,324 @@ function setEmpresaAtual(empresaId) {
   return empresaAtualId;
 }
 
-function aplicarDadosDoFirestore(data) {
-  maquinas      = Array.isArray(data.maquinas) ? data.maquinas : [];
-  usuarios      = Array.isArray(data.usuarios) ? data.usuarios : [];
-  acertos       = Array.isArray(data.acertos) ? data.acertos : [];
-  ocorrencias   = Array.isArray(data.ocorrencias) ? data.ocorrencias : [];
-  empresaPerfil = (data.empresaPerfil && typeof data.empresaPerfil === "object") ? data.empresaPerfil : {};
-  window.maquinas = maquinas;
-  window.empresaAtualId = empresaAtualId;
+
+
+window.abrirRota = async function abrirRota(id) {
+  const rota = (rotas || []).find(r => String(r.id) === String(id));
+  if (!rota) {
+    alert("❌ Rota não encontrada.");
+    return;
+  }
+
+  window.rotaAbertaId = id;
+
+  abrir("rotaDetalhe");
+
+  const titulo = document.getElementById("tituloRotaDetalhe");
+  const ul = document.getElementById("listaMaquinasRotaDetalhe");
+
+  if (titulo) {
+    titulo.textContent = `📍 Máquinas da rota: ${String(rota.nome || "").toUpperCase()}`;
+  }
+  if (!ul) return;
+
+  ul.innerHTML = "<li>⏳ Organizando rota...</li>";
+
+  const agora = new Date();
+  const mesAtual = agora.getMonth();
+  const anoAtual = agora.getFullYear();
+
+  let lista = (maquinas || []).filter(m =>
+    String(m.rota || "").trim().toUpperCase() === String(rota.nome || "").trim().toUpperCase()
+  );
+
+  // só pendentes
+  lista = lista.filter((m) => {
+    const teveAcerto = (acertos || []).some((a) => {
+      const d = new Date(a.data);
+      return (
+        String(a.numero || "").trim().toUpperCase() === String(m.numero || "").trim().toUpperCase() &&
+        d.getMonth() === mesAtual &&
+        d.getFullYear() === anoAtual
+      );
+    });
+
+    return !teveAcerto;
+  });
+
+  if (!lista.length) {
+    ul.innerHTML = "<li>✅ Nenhuma máquina pendente nessa rota.</li>";
+    return;
+  }
+
+  // tenta pegar localização atual
+  let origemAtual = null;
+  try {
+    origemAtual = await obterLocalizacaoAtualRota();
+  } catch (e) {
+    origemAtual = null;
+  }
+
+  // organiza:
+  // - com GPS por proximidade se tiver origem
+  // - sem GPS no final
+  // - se não tiver origem, tudo por número
+  lista = ordenarMaquinasDaRota(lista, origemAtual);
+
+  ul.innerHTML = "";
+
+lista.forEach((m) => {
+  const li = document.createElement("li");
+  li.style.position = "relative";
+  li.style.padding = "14px 52px 14px 14px";
+  li.style.marginBottom = "12px";
+  li.style.borderRadius = "16px";
+  li.style.background = "#0b1733";
+  li.style.listStyle = "none";
+  li.style.cursor = "pointer";
+
+  const lat = m.lat ?? m.latitude ?? null;
+  const lng = m.lng ?? m.longitude ?? null;
+  const temGPS = lat != null && lng != null && String(lat) !== "" && String(lng) !== "";
+
+  // clicar no card abre ACERTO
+  li.onclick = () => {
+    abrir("acerto");
+
+    const n = document.getElementById("numAcerto");
+    const e = document.getElementById("estabAcerto");
+
+    if (n) n.value = String(m.numero || "").toUpperCase();
+    if (e) e.value = String(m.estab || "").toUpperCase();
+
+    try { autoPorNumero(); } catch {}
+  };
+
+  const nome = document.createElement("div");
+  nome.textContent = String(m.estab || "").toUpperCase();
+  nome.style.fontWeight = "900";
+  nome.style.fontSize = "16px";
+  nome.style.lineHeight = "1.2";
+  nome.style.paddingRight = "6px";
+  nome.style.wordBreak = "break-word";
+
+  const jb = document.createElement("div");
+  jb.textContent = `JB Nº ${String(m.numero || "").toUpperCase()}`;
+  jb.style.marginTop = "4px";
+  jb.style.fontWeight = "700";
+  jb.style.fontSize = "14px";
+  jb.style.opacity = ".95";
+
+  const status = document.createElement("div");
+  status.textContent = "🟡 PENDENTE";
+  status.style.marginTop = "8px";
+  status.style.color = "#facc15";
+  status.style.fontWeight = "900";
+  status.style.fontSize = "14px";
+
+  const gps = document.createElement("div");
+  gps.textContent = temGPS ? "📍 COM LOCALIZAÇÃO" : "📍 SEM LOCALIZAÇÃO";
+  gps.style.marginTop = "4px";
+  gps.style.fontSize = "11px";
+  gps.style.opacity = ".85";
+
+  // botão pequeno no canto
+  const btnMapa = document.createElement("button");
+  btnMapa.type = "button";
+  btnMapa.textContent = "📍";
+  btnMapa.title = "Abrir localização";
+  btnMapa.style.position = "absolute";
+  btnMapa.style.top = "12px";
+  btnMapa.style.right = "12px";
+  btnMapa.style.width = "34px";
+  btnMapa.style.height = "34px";
+  btnMapa.style.minWidth = "34px";
+  btnMapa.style.padding = "0";
+  btnMapa.style.borderRadius = "10px";
+  btnMapa.style.display = "flex";
+  btnMapa.style.alignItems = "center";
+  btnMapa.style.justifyContent = "center";
+  btnMapa.style.fontSize = "16px";
+  btnMapa.style.lineHeight = "1";
+  btnMapa.style.cursor = "pointer";
+
+  btnMapa.onclick = (ev) => {
+    ev.stopPropagation();
+
+    if (!temGPS) {
+      alert("❌ Essa máquina não tem localização salva.");
+      return;
+    }
+
+    abrirGoogleMaps(lat, lng);
+  };
+
+  li.appendChild(nome);
+  li.appendChild(jb);
+  li.appendChild(status);
+  li.appendChild(gps);
+  li.appendChild(btnMapa);
+
+  ul.appendChild(li);
+});
+};
+
+function obterLocalizacaoAtualRota() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      return reject(new Error("Geolocalização não suportada."));
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        resolve({
+          lat: Number(pos.coords.latitude),
+          lng: Number(pos.coords.longitude)
+        });
+      },
+      (err) => {
+        reject(err);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
+      }
+    );
+  });
 }
+
+
+window.editarRota = async function editarRota(id) {
+  if (!confirmarSenhaAdminRotas()) return;
+
+  const rota = (rotas || []).find(r => String(r.id) === String(id));
+  if (!rota) {
+    alert("❌ Rota não encontrada.");
+    return;
+  }
+
+  const novoNome = prompt("Digite o novo nome da rota:", String(rota.nome || ""));
+  if (novoNome === null) return;
+
+  const nome = String(novoNome || "").trim().toUpperCase();
+  if (!nome) {
+    alert("❌ Nome inválido.");
+    return;
+  }
+
+  const duplicada = (rotas || []).some(r =>
+    String(r.id) !== String(id) &&
+    String(r.nome || "").trim().toUpperCase() === nome
+  );
+
+  if (duplicada) {
+    alert("⚠️ Já existe outra rota com esse nome.");
+    return;
+  }
+
+  const nomeAntigo = String(rota.nome || "").trim().toUpperCase();
+  rota.nome = nome;
+
+  (maquinas || []).forEach(m => {
+    if (String(m.rota || "").trim().toUpperCase() === nomeAntigo) {
+      m.rota = nome;
+    }
+  });
+
+  const ok = await salvarNoFirebase(true);
+  if (!ok) {
+    alert("❌ Não consegui editar a rota.");
+    return;
+  }
+
+  try { renderRotas(); } catch {}
+  try { preencherSelectRotas(); } catch {}
+  try { abrirRota(id); } catch {}
+
+  alert("✅ Rota editada com sucesso.");
+};
+
+
+window.confirmarSenhaAdminRotas = function confirmarSenhaAdminRotas() {
+  if (!exigirAdmin()) return false;
+
+  const userLogado = String(sessaoUsuario?.user || "").trim().toLowerCase();
+  const admin = (usuarios || []).find(u =>
+    String(u.user || "").trim().toLowerCase() === userLogado
+  );
+
+  if (!admin) {
+    alert("❌ Administrador logado não encontrado.");
+    return false;
+  }
+
+  const digitada = prompt("Digite a senha do administrador:");
+  if (digitada === null) return false;
+
+  const senhaCerta = String(admin.senha || "");
+  if (String(digitada) !== senhaCerta) {
+    alert("❌ Senha do administrador incorreta.");
+    return false;
+  }
+
+  return true;
+};
+
+
+window.apagarRota = async function apagarRota(id) {
+  if (!confirmarSenhaAdminRotas()) return;
+
+  const rota = (rotas || []).find(r => String(r.id) === String(id));
+  if (!rota) {
+    alert("❌ Rota não encontrada.");
+    return;
+  }
+
+  const nome = String(rota.nome || "").trim().toUpperCase();
+
+  const usadas = (maquinas || []).some(m =>
+    String(m.rota || "").trim().toUpperCase() === nome
+  );
+
+  if (usadas) {
+    const confirmar = confirm(
+      `A rota ${nome} está vinculada a máquinas.\n\nDeseja apagar a rota e remover essa rota das máquinas?`
+    );
+    if (!confirmar) return;
+
+    (maquinas || []).forEach(m => {
+      if (String(m.rota || "").trim().toUpperCase() === nome) {
+        m.rota = "";
+      }
+    });
+  } else {
+    if (!confirm(`Deseja apagar a rota ${nome}?`)) return;
+  }
+
+  rotas = (rotas || []).filter(r => String(r.id) !== String(id));
+  window.rotas = rotas;
+
+  const ok = await salvarNoFirebase(true);
+  if (!ok) {
+    alert("❌ Não consegui apagar a rota.");
+    return;
+  }
+
+  const titulo = document.getElementById("tituloRotaAberta");
+  const ul = document.getElementById("listaMaquinasRota");
+  if (titulo) titulo.textContent = "📍 Máquinas da rota";
+  if (ul) ul.innerHTML = "";
+
+  try { renderRotas(); } catch {}
+  try { preencherSelectRotas(); } catch {}
+
+  alert("✅ Rota apagada com sucesso.");
+};
+
+
+
+
 
 async function garantirDocExiste() {
   if (!docRef) throw new Error("docRef está null. Chame setEmpresaAtual() antes.");
@@ -691,6 +1000,7 @@ let ocorrencias = [];
 let maquinas = [];
 let acertos = [];
 let usuarios = [];
+let rotas = [];
 let sessaoUsuario = null;
 let firebasePronto = false;
 let __savePendente = false;
@@ -743,6 +1053,219 @@ function numJB(v) {
   const m = String(v ?? "").match(/\d+/);
   return m ? parseInt(m[0], 10) : 0;
 }
+
+
+function distanciaKm(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng / 2) * Math.sin(dLng / 2);
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c;
+}
+
+function ordenarMaquinasDaRota(lista, origem = null) {
+  const comGps = lista.filter(m => m.lat != null && m.lng != null);
+  const semGps = lista.filter(m => m.lat == null || m.lng == null);
+
+  if (!origem || !comGps.length) {
+    return [...lista].sort((a, b) => numJB(a.numero) - numJB(b.numero));
+  }
+
+  const pendentes = [...comGps];
+  const ordem = [];
+
+  let atual = { lat: Number(origem.lat), lng: Number(origem.lng) };
+
+  while (pendentes.length) {
+    let idxMelhor = 0;
+    let menor = Infinity;
+
+    for (let i = 0; i < pendentes.length; i++) {
+      const m = pendentes[i];
+      const d = distanciaKm(atual.lat, atual.lng, Number(m.lat), Number(m.lng));
+
+      if (d < menor) {
+        menor = d;
+        idxMelhor = i;
+      }
+    }
+
+    const prox = pendentes.splice(idxMelhor, 1)[0];
+    ordem.push(prox);
+
+    atual = {
+      lat: Number(prox.lat),
+      lng: Number(prox.lng)
+    };
+  }
+
+  semGps.sort((a, b) => numJB(a.numero) - numJB(b.numero));
+
+  return [...ordem, ...semGps];
+}
+
+
+
+window.criarRota = async function criarRota() {
+  const inp = document.getElementById("rotaNome");
+  if (!inp) {
+    alert("❌ Campo da rota não encontrado.");
+    return;
+  }
+
+  const nome = String(inp.value || "").trim().toUpperCase();
+  if (!nome) {
+    alert("❌ Digite o nome da rota.");
+    return;
+  }
+
+  rotas = Array.isArray(rotas) ? rotas : [];
+
+  const existe = rotas.some(r => String(r.nome || "").trim().toUpperCase() === nome);
+  if (existe) {
+    alert("⚠️ Essa rota já existe.");
+    return;
+  }
+
+  rotas.push({
+    id: Date.now(),
+    nome,
+    criadaEm: new Date().toISOString()
+  });
+
+  const ok = await salvarNoFirebase(true);
+  if (!ok) {
+    rotas = rotas.filter(r => String(r.nome || "") !== nome);
+    alert("❌ Não consegui salvar a rota.");
+    return;
+  }
+
+  inp.value = "";
+  try { renderRotas(); } catch {}
+  try { preencherSelectRotas(); } catch {}
+
+  alert("✅ Rota salva com sucesso!");
+};
+
+
+window.renderRotas = function renderRotas() {
+  const ul = document.getElementById("listaRotas");
+  if (!ul) return;
+
+  ul.innerHTML = "";
+
+  const lista = Array.isArray(rotas) ? [...rotas] : [];
+
+  lista.sort((a, b) =>
+    String(a.nome || "").localeCompare(String(b.nome || ""), "pt-BR", { sensitivity: "base" })
+  );
+
+  if (!lista.length) {
+    ul.innerHTML = "<li>❌ Nenhuma rota cadastrada.</li>";
+    return;
+  }
+
+  lista.forEach((r) => {
+    const li = document.createElement("li");
+    li.style.display = "flex";
+    li.style.alignItems = "center";
+    li.style.justifyContent = "space-between";
+    li.style.gap = "10px";
+
+    const nome = document.createElement("span");
+    nome.textContent = String(r.nome || "").toUpperCase();
+    nome.style.fontWeight = "900";
+
+    const acoes = document.createElement("div");
+    acoes.style.display = "flex";
+    acoes.style.gap = "8px";
+    acoes.style.flexWrap = "wrap";
+
+    const btnAbrir = document.createElement("button");
+    btnAbrir.type = "button";
+    btnAbrir.textContent = "ABRIR";
+    btnAbrir.onclick = () => abrirRota(r.id);
+
+    const btnEditar = document.createElement("button");
+    btnEditar.type = "button";
+    btnEditar.textContent = "EDITAR";
+    btnEditar.onclick = () => editarRota(r.id);
+
+    const btnApagar = document.createElement("button");
+    btnApagar.type = "button";
+    btnApagar.textContent = "APAGAR";
+    btnApagar.onclick = () => apagarRota(r.id);
+
+    acoes.appendChild(btnAbrir);
+    acoes.appendChild(btnEditar);
+    acoes.appendChild(btnApagar);
+
+    li.appendChild(nome);
+    li.appendChild(acoes);
+
+    ul.appendChild(li);
+  });
+};
+
+
+window.preencherSelectRotas = function preencherSelectRotas(valorAtual = "") {
+  const sel = document.getElementById("detRota");
+  if (!sel) return;
+
+  const atual = String(valorAtual || sel.value || "").toUpperCase();
+
+  sel.innerHTML = `<option value="">SEM ROTA</option>`;
+
+  const lista = Array.isArray(rotas) ? [...rotas] : [];
+  lista.sort((a, b) =>
+    String(a.nome || "").localeCompare(String(b.nome || ""), "pt-BR", { sensitivity: "base" })
+  );
+
+  lista.forEach((r) => {
+    const op = document.createElement("option");
+    op.value = String(r.nome || "").toUpperCase();
+    op.textContent = String(r.nome || "").toUpperCase();
+
+    if (op.value === atual) op.selected = true;
+
+    sel.appendChild(op);
+  });
+};
+
+
+
+function aplicarDadosDoFirestore(data) {
+  maquinas      = Array.isArray(data.maquinas) ? data.maquinas : [];
+  usuarios      = Array.isArray(data.usuarios) ? data.usuarios : [];
+  acertos       = Array.isArray(data.acertos) ? data.acertos : [];
+  ocorrencias   = Array.isArray(data.ocorrencias) ? data.ocorrencias : [];
+  rotas         = Array.isArray(data.rotas) ? data.rotas : [];
+  empresaPerfil = (data.empresaPerfil && typeof data.empresaPerfil === "object") ? data.empresaPerfil : {};
+
+  window.maquinas = maquinas;
+  window.rotas = rotas;
+  window.empresaAtualId = empresaAtualId;
+
+  try { renderRotas(); } catch {}
+  try { preencherSelectRotas(); } catch {}
+}
+
+
+function abrirTelaRotas() {
+  try { renderRotas(); } catch {}
+  try { preencherSelectRotas(); } catch {}
+  abrir("rotas");
+}
+window.abrirTelaRotas = abrirTelaRotas;
+
 
 
 function formatJB(v) {
@@ -1251,6 +1774,7 @@ function resumoSeguroMaquina(m) {
     numero: String(m?.numero || "").trim().toUpperCase(),
     estab: String(m?.estab || "").trim().toUpperCase(),
     status: String(m?.status || "").trim().toUpperCase(),
+    rota: String(m?.rota || "").trim().toUpperCase(),
     cliente: String(m?.cliente || ""),
     endereco: String(m?.endereco || ""),
     porcBase: Number(m?.porcBase || 0),
@@ -1274,6 +1798,8 @@ function resumoSeguroMaquina(m) {
     resetStatusAt: m?.resetStatusAt || null
   };
 }
+
+
 
 async function criarBackupCloudAntesDeSalvar(payload) {
   const emp = String(empresaAtualId || EMPRESA_PRINCIPAL_ID).toUpperCase();
@@ -1394,6 +1920,7 @@ async function salvarNoFirebase(force = false) {
       usuarios: safeUsuarios,
       acertos: safeAcertos,
       ocorrencias: safeOcorrencias,
+      rotas: Array.isArray(rotas) ? rotas : [],
       empresaPerfil
     };
 
@@ -2065,29 +2592,69 @@ async function uploadFotoParaStorage({ empresaId, numeroMaquina, blob }) {
 
 
 // -------- FUNÇÃO PRINCIPAL --------
-async function escolherFotoMaquina(numero) {
+function escolherFotoMaquina(numero) {
   const num = String(numero || maquinaSelecionadaNumero || "").trim().toUpperCase();
   if (!num) return alert("❌ Máquina não encontrada.");
 
   const m = (maquinas || []).find(x => String(x.numero || "").toUpperCase() === num);
   if (!m) return alert("❌ Máquina não encontrada.");
 
-  const input = document.createElement("input");
-  input.type = "file";
-  input.accept = "image/*";
-  input.setAttribute("capture", "environment");
+  // 🔥 cria menu tipo WhatsApp
+  const menu = document.createElement("div");
+  menu.style.position = "fixed";
+  menu.style.bottom = "0";
+  menu.style.left = "0";
+  menu.style.right = "0";
+  menu.style.background = "#111";
+  menu.style.padding = "16px";
+  menu.style.borderTopLeftRadius = "16px";
+  menu.style.borderTopRightRadius = "16px";
+  menu.style.zIndex = "99999";
 
-  input.onchange = () => {
-    const file = input.files && input.files[0];
-    if (!file) return;
+  menu.innerHTML = `
+    <button id="btnCamera" style="width:100%;padding:14px;margin-bottom:10px;border-radius:10px;font-weight:800;">
+      📷 Tirar Foto
+    </button>
 
-    const reader = new FileReader();
-    reader.onload = () => abrirTelaRecorte(reader.result, m, num);
-    reader.readAsDataURL(file);
-  };
+    <button id="btnGaleria" style="width:100%;padding:14px;margin-bottom:10px;border-radius:10px;font-weight:800;">
+      🖼️ Escolher da Galeria
+    </button>
 
-  input.click();
+    <button id="btnCancelar" style="width:100%;padding:14px;border-radius:10px;">
+      Cancelar
+    </button>
+  `;
+
+  document.body.appendChild(menu);
+
+  function abrirInput(modo) {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+
+    if (modo === "camera") {
+      input.setAttribute("capture", "environment");
+    }
+
+    input.onchange = () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = () => abrirTelaRecorte(reader.result, m, num);
+      reader.readAsDataURL(file);
+    };
+
+    input.click();
+    menu.remove();
+  }
+
+  menu.querySelector("#btnCamera").onclick = () => abrirInput("camera");
+  menu.querySelector("#btnGaleria").onclick = () => abrirInput("galeria");
+  menu.querySelector("#btnCancelar").onclick = () => menu.remove();
 }
+
+
 
 function abrirTelaRecorte(src, maquina, num) {
   const overlay = document.createElement("div");
@@ -3578,6 +4145,8 @@ function arred2(n) {
   return Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
 }
 
+
+
 function corrigirStatusMaquinas() {
   if (!Array.isArray(maquinas)) return;
   maquinas.forEach(m => {
@@ -3705,35 +4274,37 @@ function listarMaquinas() {
     li.appendChild(info);
 
     li.onclick = () => {
-      try {
-        window.maquinaSelecionadaNumero = numero;
-        if (typeof abrir === "function") abrir("detalheMaquina");
+  try {
+    window.maquinaSelecionadaNumero = numero;
+    if (typeof abrir === "function") abrir("detalheMaquina");
 
-        const detNumero   = document.getElementById("detNumero");
-        const detEstab    = document.getElementById("detEstab");
-        const detCliente  = document.getElementById("detCliente");
-        const detFone     = document.getElementById("detFone");
-        const detEndereco = document.getElementById("detEndereco");
-        const detStatus   = document.getElementById("detStatus");
+    const detNumero   = document.getElementById("detNumero");
+    const detEstab    = document.getElementById("detEstab");
+    const detCliente  = document.getElementById("detCliente");
+    const detFone     = document.getElementById("detFone");
+    const detEndereco = document.getElementById("detEndereco");
+    const detStatus   = document.getElementById("detStatus");
+    const detRota     = document.getElementById("detRota");
 
-        if (detNumero) detNumero.value = numero;
-        if (detEstab) detEstab.value = estab;
-        if (detCliente) detCliente.value = String(m?.cliente ?? m?.nomeCliente ?? "").trim();
-        if (detFone) detFone.value = String(m?.tel ?? m?.fone ?? m?.foneCliente ?? "").trim();
-        if (detEndereco) detEndereco.value = String(m?.endereco ?? "").trim();
+    if (detNumero) detNumero.value = numero;
+    if (detEstab) detEstab.value = estab;
+    if (detCliente) detCliente.value = String(m?.cliente ?? m?.nomeCliente ?? "").trim();
+    if (detFone) detFone.value = String(m?.tel ?? m?.fone ?? m?.foneCliente ?? "").trim();
+    if (detEndereco) detEndereco.value = String(m?.endereco ?? "").trim();
+    if (detStatus) detStatus.value = normalizarStatus(m?.status || "ALUGADA");
 
-        // ✅ status sempre normalizado para o select bater
-        if (detStatus) detStatus.value = normalizarStatus(m?.status || "ALUGADA");
+    if (detRota) preencherSelectRotas(String(m?.rota || "").trim().toUpperCase());
 
-        if (typeof carregarMaquinaPorNumero === "function") carregarMaquinaPorNumero();
-      } catch (e) {
-        console.error(e);
-      }
-    };
+    if (typeof carregarMaquinaPorNumero === "function") carregarMaquinaPorNumero();
+  } catch (e) {
+    console.error(e);
+  }
+};
 
     ul.appendChild(li);
   });
 }
+
 
 
 // ====== ABRIR DETALHE (CORRIGIDA) ======
@@ -4052,6 +4623,7 @@ async function salvarAlteracoesMaquina() {
     const detEndereco= document.getElementById("detEndereco");
     const detStatus  = document.getElementById("detStatus");
     const detFone    = document.getElementById("detFone");
+    const detRota    = document.getElementById("detRota");
 
     // ✅ novos campos do detalhe
     const detCpf = document.getElementById("detCpf");
@@ -4079,6 +4651,7 @@ async function salvarAlteracoesMaquina() {
     const enderecoTxt = (detEndereco?.value || "").trim().toUpperCase();
     const status = (detStatus?.value || "ALUGADA");
     const foneTxt = (detFone?.value || "").trim();
+    const rota = (detRota?.value || "").trim().toUpperCase();
 
     const cpf = (detCpf?.value || "").trim();
     const rg  = (detRg?.value  || "").trim();
@@ -4136,6 +4709,7 @@ async function salvarAlteracoesMaquina() {
       m.cpf = cpf;
       m.rg = rg;
       m.porcBase = porcBase;
+      m.rota = rota;
 
       // telefone normal
       m.ddd = ddd;
@@ -4145,10 +4719,17 @@ async function salvarAlteracoesMaquina() {
         : String(foneTxt || "");
     }
 
-    // endereço: não sobrescreve se estiver mostrando GPS "LAT: | LNG:"
-    if (!/^LAT:\-?\d+(\.\d+)?\s*\|\s*LNG:\-?\d+(\.\d+)?$/i.test(enderecoTxt)) {
-      m.endereco = enderecoTxt;
-    }
+    // ✅ endereço / localização manual
+m.endereco = enderecoTxt;
+
+const coordsManual = extrairCoordsDoTexto(enderecoTxt);
+
+if (coordsManual && Number.isFinite(coordsManual.lat) && Number.isFinite(coordsManual.lng)) {
+  m.lat = coordsManual.lat;
+  m.lng = coordsManual.lng;
+  m.gpsUpdatedAt = new Date().toISOString();
+  m.gpsAccuracy = null;
+}
 
     // ✅ IMPORTANTE:
     // Removido o bloco que sobrescrevia DEPÓSITO:
