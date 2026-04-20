@@ -671,9 +671,28 @@ window.abrirRota = async function abrirRota(id) {
   const titulo = document.getElementById("tituloRotaDetalhe");
   const ul = document.getElementById("listaMaquinasRotaDetalhe");
 
-  if (titulo) {
-    titulo.textContent = `📍 Máquinas da rota: ${String(rota.nome || "").toUpperCase()}`;
-  }
+  const nomeRota = String(rota.nome || "").toUpperCase();
+const faltamTopo = contarPendentesDaRota(nomeRota);
+
+if (titulo) {
+  titulo.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+      <span>📍 Máquinas da rota: ${nomeRota}</span>
+      <span style="
+        padding:8px 12px;
+        border-radius:999px;
+        background:${faltamTopo > 0 ? "#fcd34d" : "#14532d"};
+        color:${faltamTopo > 0 ? "#ef4444" : "#86efac"};
+        font-weight:900;
+        font-size:13px;
+        white-space:nowrap;
+      ">
+        ${faltamTopo > 0 ? `FALTAM ${faltamTopo}` : "ROTA CONCLUÍDA ✅"}
+      </span>
+    </div>
+  `;
+}
+  
   if (!ul) return;
 
   ul.innerHTML = "<li>⏳ Organizando rota...</li>";
@@ -764,11 +783,12 @@ lista.forEach((m) => {
   jb.style.opacity = ".95";
 
   const status = document.createElement("div");
-  status.textContent = "🟡 PENDENTE";
-  status.style.marginTop = "8px";
-  status.style.color = "#facc15";
-  status.style.fontWeight = "900";
-  status.style.fontSize = "14px";
+status.textContent = "🟡";
+status.style.marginTop = "8px";
+status.style.color = "#facc15";
+status.style.fontWeight = "900";
+status.style.fontSize = "18px";
+status.style.lineHeight = "1";
 
   const gps = document.createElement("div");
   gps.textContent = temGPS ? "📍 COM LOCALIZAÇÃO" : "📍 SEM LOCALIZAÇÃO";
@@ -1156,11 +1176,37 @@ window.criarRota = async function criarRota() {
 };
 
 
+function contarPendentesDaRota(nomeRota) {
+  const agora = new Date();
+  const mesAtual = agora.getMonth();
+  const anoAtual = agora.getFullYear();
+
+  const lista = (maquinas || []).filter(m =>
+    String(m.rota || "").trim().toUpperCase() === String(nomeRota || "").trim().toUpperCase()
+  );
+
+  return lista.filter((m) => {
+    const teveAcerto = (acertos || []).some((a) => {
+      const d = new Date(a.data);
+      return (
+        String(a.numero || "").trim().toUpperCase() === String(m.numero || "").trim().toUpperCase() &&
+        d.getMonth() === mesAtual &&
+        d.getFullYear() === anoAtual
+      );
+    });
+
+    return !teveAcerto;
+  }).length;
+}
+
+
 window.renderRotas = function renderRotas() {
   const ul = document.getElementById("listaRotas");
   if (!ul) return;
 
   ul.innerHTML = "";
+  ul.style.padding = "0";
+  ul.style.margin = "0";
 
   const lista = Array.isArray(rotas) ? [...rotas] : [];
 
@@ -1174,41 +1220,81 @@ window.renderRotas = function renderRotas() {
   }
 
   lista.forEach((r) => {
-    const li = document.createElement("li");
-    li.style.display = "flex";
-    li.style.alignItems = "center";
-    li.style.justifyContent = "space-between";
-    li.style.gap = "10px";
+    const nomeRota = String(r.nome || "").toUpperCase();
+    const faltam = contarPendentesDaRota(nomeRota);
 
-    const nome = document.createElement("span");
-    nome.textContent = String(r.nome || "").toUpperCase();
+    const li = document.createElement("li");
+    li.style.listStyle = "none";
+    li.style.background = "#0b1733";
+    li.style.borderRadius = "16px";
+    li.style.padding = "14px";
+    li.style.marginBottom = "12px";
+
+    const topo = document.createElement("div");
+    topo.style.display = "flex";
+    topo.style.alignItems = "center";
+    topo.style.justifyContent = "space-between";
+    topo.style.gap = "12px";
+    topo.style.flexWrap = "wrap";
+    topo.style.marginBottom = "14px";
+
+    const nome = document.createElement("div");
+    nome.textContent = nomeRota;
     nome.style.fontWeight = "900";
+    nome.style.fontSize = "22px";
+    nome.style.lineHeight = "1.1";
+    nome.style.wordBreak = "break-word";
+
+    const badge = document.createElement("div");
+
+if (faltam > 0) {
+  badge.textContent = `FALTAM: ${faltam}`;
+  badge.style.background = "#fcd34d"; // amarelo equilibrado
+  badge.style.color = "#991b1b"; // vermelho elegante
+} else {
+  badge.textContent = "ROTA CONCLUÍDA ✅";
+  badge.style.background = "#14532d";
+  badge.style.color = "#86efac";
+}
+
+badge.style.padding = "8px 12px";
+badge.style.borderRadius = "999px";
+badge.style.fontWeight = "900";
+badge.style.fontSize = "13px";
+badge.style.whiteSpace = "nowrap";
+
+
+    topo.appendChild(nome);
+    topo.appendChild(badge);
 
     const acoes = document.createElement("div");
-    acoes.style.display = "flex";
-    acoes.style.gap = "8px";
-    acoes.style.flexWrap = "wrap";
+    acoes.style.display = "grid";
+    acoes.style.gridTemplateColumns = "1fr";
+    acoes.style.gap = "10px";
 
     const btnAbrir = document.createElement("button");
     btnAbrir.type = "button";
     btnAbrir.textContent = "ABRIR";
+    btnAbrir.style.width = "100%";
     btnAbrir.onclick = () => abrirRota(r.id);
 
     const btnEditar = document.createElement("button");
     btnEditar.type = "button";
     btnEditar.textContent = "EDITAR";
+    btnEditar.style.width = "100%";
     btnEditar.onclick = () => editarRota(r.id);
 
     const btnApagar = document.createElement("button");
     btnApagar.type = "button";
     btnApagar.textContent = "APAGAR";
+    btnApagar.style.width = "100%";
     btnApagar.onclick = () => apagarRota(r.id);
 
     acoes.appendChild(btnAbrir);
     acoes.appendChild(btnEditar);
     acoes.appendChild(btnApagar);
 
-    li.appendChild(nome);
+    li.appendChild(topo);
     li.appendChild(acoes);
 
     ul.appendChild(li);
