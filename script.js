@@ -1,29 +1,340 @@
-// =====================
-// 🔥 FIREBASE (Firestore) - SINCRONIZAR PC + CELULAR
-// =====================
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+console.log("🚀 INIT script.js", {
+  href: location.href,
+  isTop: window === window.top,
+  referrer: document.referrer,
+  scriptCount: document.querySelectorAll("script[src]").length,
+});
+console.trace("📌 TRACE init script.js");
 
+// erros globais (pode ficar fora do main, ok)
+window.addEventListener("error", (e) => {
+  console.error("❌ ERRO GLOBAL:", e.message, e.filename, e.lineno);
+});
+window.addEventListener("unhandledrejection", (e) => {
+  console.error("❌ PROMISE NÃO TRATADA:", e.reason);
+});
+
+// ✅ bloqueia segunda execução (top-level)
+if (window.__STRONDA_APP_INIT__) {
+  console.warn("⚠️ script.js já foi iniciado. Ignorando segunda execução.");
+} else {
+  window.__STRONDA_APP_INIT__ = true;
+
+  window.addEventListener("DOMContentLoaded", () => {
+    boot().catch((e) => console.error("❌ boot() falhou:", e));
+  });
+}
+
+// ✅ helpers globais de permissão (precisa existir ANTES do boot)
+window.isAdmin = function isAdmin() {
+  const t = String(window.sessaoUsuario?.tipo || "").toUpperCase();
+  return t === "ADMIN" || t === "MASTER";
+};
+
+window.isMaster = function isMaster() {
+  const t = String(window.sessaoUsuario?.tipo || "").toUpperCase();
+  return t === "MASTER";
+};
+
+window.isColab = function isColab() {
+  const t = String(window.sessaoUsuario?.tipo || "").toUpperCase();
+  return t === "COLAB" || t === "COLABORADOR";
+};
+
+
+
+
+async function boot() {
+  console.log("🚀 boot() start");
+
+  await ensureAuth();
+
+  const emp = localStorage.getItem("empresaAtualId") || EMPRESA_PRINCIPAL_ID;
+  setEmpresaAtual(emp);
+
+  await carregarDadosUmaVezParaLogin();
+
+  if (!validarSessaoAtualContraUsuarios()) return;
+
+  iniciarFormulario();
+  ligarEventosOcorrenciaPublica();
+
+  aplicarClassePermissaoBody();
+  aplicarPermissoesMenu();
+  aplicarPermissoesUI();
+  ativarProtecaoCadastroMaquina();
+  blindarIconeOcorrencias();
+
+  listarMaquinas();
+  atualizarStatus();
+  listarOcorrencias();
+  atualizarAlertaOcorrencias();
+
+  if (sessaoUsuario) {
+    pararSnapshotAtual();
+    __syncAtivo = false;
+    await iniciarSincronizacaoFirebase();
+  }
+
+  // ✅ liga automático: ao clicar "Selecionar Empresa" injeta Bloquear/Desbloquear
+  try { ligarGanchoSelecionarEmpresaParaInjetarBloqueio(); } catch {}
+
+  console.log("✅ boot() ok");
+}
+
+console.log("✅ script.js carregou!");
+
+// ✅ Firebase App (CDN)
+import { initializeApp, getApps, getApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+
+// ✅ Firestore (CDN)
 import {
   getFirestore,
+  collection,
   doc,
   getDoc,
+  getDocs,
   setDoc,
-  onSnapshot,
-  deleteDoc,
+  addDoc,
   updateDoc,
-  arrayUnion
+  deleteDoc,
+  query,
+  where,
+  orderBy,
+  limit,
+  onSnapshot,
+  arrayUnion, 
+  serverTimestamp,
+  writeBatch
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
+// ✅ Auth (CDN)
 import {
   getAuth,
-  signInAnonymously
+  signInAnonymously,
+  onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 
-  
+// ✅ Storage (CDN)  << COLE AQUI
+import {
+  getStorage,
+  ref,
+  uploadBytes,
+  getDownloadURL,
+  listAll
+} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
 
-let __preloadAt = 0;
-let __preloadEmpresa = "";
-const __preloadCooldownMs = 30000; // 30s
+
+// 1) Firebase config (use o seu do painel)
+const firebaseConfig = {
+  apiKey: "AIzaSyDwKkCtERVgvOsmEH1X_T1gqn66bDRHsYo",
+  authDomain: "stronda-music-controle.firebaseapp.com",
+  projectId: "stronda-music-controle",
+  storageBucket: "stronda-music-controle.firebasestorage.app",
+  messagingSenderId: "339385914034",
+  appId: "1:339385914034:web:601d747b7151d507ad6fab"
+};
+
+// ✅ (3) Inicialização segura (não duplica app)
+const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+
+// ✅ (4) Logs de debug (coloca logo abaixo do app)
+console.log("Firebase apps:", getApps().length);
+console.log("apiKey em uso:", app.options.apiKey);
+console.log("config completo:", app.options);
+
+// Firebase services
+const db = getFirestore(app);
+const auth = getAuth(app);
+const storage = getStorage(app);
+
+let _fcModo = "DIARIO";
+let __authReady = null;
+
+
+
+function ensureAuth() {
+  if (__authReady) return __authReady;
+
+  __authReady = new Promise((resolve, reject) => {
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      try {
+        if (user) {
+          unsub?.();
+          return resolve(user);
+        }
+        await signInAnonymously(auth);
+        // vai disparar o onAuthStateChanged de novo com user
+      } catch (e) {
+        unsub?.();
+        reject(e);
+      }
+    });
+  });
+
+  return __authReady;
+}
+
+
+// =====================
+// ✅ EMPRESA PRINCIPAL
+// =====================
+const EMPRESA_PRINCIPAL_ID   = "STRONDA-MUSIC";
+const EMPRESA_PRINCIPAL_NOME = "STRONDA MUSIC";
+const EMPRESA_PRINCIPAL = EMPRESA_PRINCIPAL_ID; // ✅ compatibilidade com código antigo
+
+
+
+
+// =====================
+// 🔥 FIREBASE (Firestore)
+// =====================
+
+// 6) Exemplo de submit do formulário (ajuste IDs do seu HTML)
+function iniciarFormulario() {
+  const form = document.getElementById("formMaquina");
+  if (!form) return;
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+
+    const numero = (document.getElementById("numeroMaquina")?.value || "").trim().toUpperCase();
+    if (!numero) {
+      alert("❌ Digite o número da máquina.");
+      return;
+    }
+
+    try {
+      await cadastrarMaquina({
+        numero,
+        estab: labelDeposito(),
+        status: "DEPOSITO"
+      });
+
+      form.reset();
+
+      try { listarMaquinas(); } catch {}
+      try { atualizarStatus(); } catch {}
+      try { listarOcorrencias(); } catch {}
+    } catch (err) {
+      alert(err.message || "Erro ao cadastrar máquina.");
+      console.error(err);
+    }
+  });
+}
+
+
+async function cadastrarMaquina(dados = {}) {
+  const numero = String(dados.numero || "").trim().toUpperCase();
+  if (!numero) throw new Error("❌ Digite o número da máquina.");
+
+  // usa SEMPRE a variável principal do sistema
+  maquinas = Array.isArray(maquinas) ? maquinas : [];
+
+  const jaExiste = maquinas.some(
+    (m) => String(m?.numero || "").trim().toUpperCase() === numero
+  );
+
+  if (jaExiste) {
+    throw new Error("⚠️ Esse número já existe no Depósito ou em Máquinas cadastradas");
+  }
+
+  const estabDeposito = String(
+    dados.estab || (typeof labelDeposito === "function" ? labelDeposito() : "DEPOSITO")
+  ).trim().toUpperCase();
+
+  const nova = {
+    numero,
+    estab: estabDeposito,
+    cliente: "",
+    endereco: "",
+    porcBase: 0,
+    pixMaquinaId: "",
+    ddd: "",
+    tel: "",
+    foneFormatado: "",
+    cpf: "",
+    rg: "",
+    lat: null,
+    lng: null,
+    status: "DEPOSITO",
+    resetStatusAt: null,
+    dataCadastro: new Date().toISOString()
+  };
+
+  maquinas.push(nova);
+
+  // espelha no window só por compatibilidade com partes antigas
+  window.maquinas = maquinas;
+
+  const ok = await salvarNoFirebase(true);
+  if (!ok) {
+    // desfaz se falhou
+    maquinas = maquinas.filter(
+      (m) => String(m?.numero || "").trim().toUpperCase() !== numero
+    );
+    window.maquinas = maquinas;
+    throw new Error("❌ Não consegui salvar no Firebase.");
+  }
+
+  try { listarMaquinas(); } catch {}
+  try { atualizarStatus(); } catch {}
+  try { listarOcorrencias(); } catch {}
+  try { atualizarAlertaOcorrencias(); } catch {}
+
+  return nova;
+}
+
+window.salvarMaquina = async function () {
+  const numero =
+    (document.getElementById("numeroMaquina")?.value ||
+     document.getElementById("numMaquina")?.value ||
+     "").trim().toUpperCase();
+
+  if (!numero) {
+    alert("❌ Digite o número da máquina.");
+    return;
+  }
+
+  try {
+    await cadastrarMaquina({
+      numero,
+      estab: labelDeposito(),
+      status: "DEPOSITO"
+    });
+
+    const f1 = document.getElementById("formMaquina");
+    if (f1) f1.reset();
+
+    const n1 = document.getElementById("numMaquina");
+    if (n1) n1.value = "";
+
+    const n2 = document.getElementById("numeroMaquina");
+    if (n2) n2.value = "";
+
+    alert("✅ Número cadastrado com sucesso!");
+  } catch (e) {
+    alert(e.message || "Erro ao cadastrar máquina.");
+    console.error(e);
+  }
+};
+
+
+function iniciarListaMaquinas() {
+  // TODO: implementar depois
+  console.log("iniciarListaMaquinas: ainda não implementado");
+}
+
+
+
+// ✅ agora sim pode expor no console
+window.__db = db;
+
+
+// ✅ e só agora pode usar doc(db,...)
+const EMPRESAS_LIST_DOC = doc(db, "appEmpresas", "lista");
+
+
 let __retryQuotaTimer = null;
 let __firestoreBloqueado = false;
 let __avisouQuotaOffline = false;
@@ -33,6 +344,110 @@ function isQuotaErr(err) {
   const msg  = String(err?.message || "");
   return code.includes("resource-exhausted") || /quota/i.test(msg);
 }
+
+// ===============================
+// ✅ BACKUP LOCAL (anti-perda)
+// ===============================
+function keyBackupEmpresa(empId) {
+  const id = String(
+    empId ||
+    empresaAtualId ||
+    localStorage.getItem("empresaAtualId") ||
+    EMPRESA_PRINCIPAL_ID
+  ).trim().toUpperCase();
+
+  return `backup_${id}`;
+}
+
+
+
+function salvarBackupLocal() {
+  try {
+    const payload = {
+      versao: 1,
+      empresa: (empresaAtualId || localStorage.getItem("empresaAtualId") || EMPRESA_PRINCIPAL_ID),
+      salvoEm: new Date().toISOString(),
+      dados: { ocorrencias, maquinas, acertos, usuarios },
+    };
+
+    localStorage.setItem(keyBackupEmpresa(payload.empresa), JSON.stringify(payload));
+    return true;
+  } catch (e) {
+    console.warn("backup local falhou:", e);
+    return false;
+  }
+}
+
+
+
+function carregarBackupLocal(empId = null) {
+  try {
+    const emp = String(
+      empId ||
+      empresaAtualId ||
+      localStorage.getItem("empresaAtualId") ||
+      EMPRESA_PRINCIPAL_ID
+    ).trim().toUpperCase();
+
+    const raw = localStorage.getItem(keyBackupEmpresa(emp));
+    if (!raw) return false;
+
+    const obj = JSON.parse(raw);
+    const d = obj?.dados || {};
+
+    if (Array.isArray(d.ocorrencias)) ocorrencias = d.ocorrencias;
+    if (Array.isArray(d.maquinas))    maquinas    = d.maquinas.map(normalizarGPSMaquina);
+    if (Array.isArray(d.acertos))     acertos     = d.acertos;
+    if (Array.isArray(d.usuarios))    usuarios    = d.usuarios;
+
+    return true;
+  } catch (e) {
+    console.warn("carregar backup local falhou:", e);
+    return false;
+  }
+}
+
+
+// ✅ Busca estabelecimento pelo número da máquina dentro da empresa escolhida (tela pública)
+async function buscarEstabPorEmpresaENumero(empId, numero) {
+  try {
+    empId = String(empId || "").trim().toUpperCase();
+    numero = String(numero || "").trim().toUpperCase();
+    if (!empId || !numero) return "";
+
+    await ensureAuth();
+
+    const ref = doc(db, "empresas", empId, "dados", "app");
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return "";
+
+    const data = snap.data() || {};
+    const lista = Array.isArray(data.maquinas) ? data.maquinas : [];
+    const m = lista.find(x => String(x.numero || "").toUpperCase() === numero);
+
+    return m ? String(m.estab || "").toUpperCase() : "";
+  } catch (e) {
+    console.error("buscarEstabPorEmpresaENumero erro:", e);
+    if (isQuotaErr(e)) {
+      try { entrarModoOfflinePorQuota(e); } catch {}
+    }
+    return "";
+  }
+}
+
+
+const RETRY_QUOTA_MS = 60 * 60 * 1000; // ✅ 1 hora (DECIDIDO)
+
+
+function normalizaEmpresaId(valor) {
+  return String(valor || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "-"); // espaço vira hífen
+}
+
+
+
 
 function entrarModoOfflinePorQuota(err) {
   __firestoreBloqueado = true;
@@ -56,69 +471,527 @@ function entrarModoOfflinePorQuota(err) {
     );
   }
 
-  console.warn("Firestore em modo offline por quota:", err);
-
-  // ✅ tenta religar depois de 10 minutos (somente quando entrou em quota)
   clearTimeout(__retryQuotaTimer);
   __retryQuotaTimer = setTimeout(() => {
-  __firestoreBloqueado = false;
-  __avisouQuotaOffline = false;
-  iniciarSincronizacaoFirebase();
-}, 60 * 60 * 1000); // ✅ 1 hora
-
+    __firestoreBloqueado = false;
+    __avisouQuotaOffline = false;
+    iniciarSincronizacaoFirebase();
+  }, RETRY_QUOTA_MS);
 }
-
-
-// ✅ COLOQUE AQUI SEU firebaseConfig do Firebase Console
-const firebaseConfig = {
-  apiKey: "AIzaSyDwKkCtERVgvOsmEH1X_T1gqn66bDRHsYo",
-  authDomain: "stronda-music-controle.firebaseapp.com",
-  projectId: "stronda-music-controle",
-  storageBucket: "stronda-music-controle.firebasestorage.app",
-  messagingSenderId: "339385914034",
-  appId: "1:339385914034:web:601d747b7151d507ad6fab"
-};
-
-
-const appFirebase = initializeApp(firebaseConfig);
-const db = getFirestore(appFirebase);
-const auth = getAuth(appFirebase);
-
-
-
-
-
 
 // ✅ UM ÚNICO DOC COM TODOS OS DADOS (mais simples)
 let empresaAtualId = null;
 let docRef = null;
 let unsubSnapshot = null;
-
-let __authPromise = null;
+let empresaAtual = null;
 let __syncAtivo = false;     // indica que snapshot está ligado
 let __syncIniciando = false; // evita iniciar duas vezes ao mesmo tempo
+let __authPromise = null;
 
-async function ensureAuth() {
-  if (__authPromise) return __authPromise;
-  __authPromise = signInAnonymously(auth).catch((e) => {
-    __authPromise = null;
-    throw e;
+
+window.buscarEstabPorEmpresaENumero = buscarEstabPorEmpresaENumero;
+
+
+function esconderBotaoCadastroMaquinaDoColab() {
+  if (typeof isAdmin !== "function" || !isAdmin()) return;
+
+
+  const botoes = document.querySelectorAll("#menu button, #menu .btn, #menu a, #menu div");
+  botoes.forEach(b => {
+    if ((b.textContent || "").toUpperCase().includes("CADASTRO DE MÁQUINA")) {
+      b.style.display = "none";
+    }
   });
-  return __authPromise;
+}
+
+
+// =====================
+// 🏷️ DEPÓSITO (nome automático)
+// =====================
+let empresaPerfil = {}; // ✅ vamos carregar do Firestore junto com maquinas/usuarios etc
+
+// =====================
+// 🔒 BLOQUEIO MANUAL (helpers)
+// =====================
+function empresaEstaBloqueada(perfil) {
+  const p = perfil && typeof perfil === "object" ? perfil : {};
+  return p.manualBlocked === true;
+}
+
+function motivoBloqueioEmpresa(perfil) {
+  const p = perfil && typeof perfil === "object" ? perfil : {};
+  if (p.manualBlocked) return p.manualBlockedReason || "empresa bloqueada manualmente";
+  return "";
+}
+
+// =====================
+// 🚫 ESCONDER TROCA SENHA MASTER FORA DA STRONDA (BLINDADO)
+// =====================
+function esconderTrocaSenhaMasterForaDaStronda() {
+  const principal = String(EMPRESA_PRINCIPAL_ID || "").toUpperCase();
+  const emp = String(empresaAtualId || "").toUpperCase();
+
+  const menu = document.getElementById("menu");
+  if (!menu) return;
+
+  const tipoSessao = String((window.sessaoUsuario && window.sessaoUsuario.tipo) || "").toUpperCase();
+  const isMaster = (tipoSessao === "MASTER");
+  if (!isMaster) return;
+
+  const deveMostrar = (emp === principal);
+
+  const botoes = menu.querySelectorAll("button");
+  botoes.forEach((b) => {
+    const t = String(b.textContent || "").toUpperCase().trim();
+
+    const ehBotaoMaster =
+      (t.includes("TROCAR SENHA") && t.includes("MASTER")) ||
+      (t.includes("TROCAR SENHA ADMINISTRADOR") && t.includes("MASTER"));
+
+    if (ehBotaoMaster) {
+      b.style.display = deveMostrar ? "" : "none";
+    }
+  });
+}
+
+function ligarObserverEsconderMaster() {
+  if (window.__obsHideMasterBtn) return;
+
+  const menu = document.getElementById("menu");
+  if (!menu) {
+    setTimeout(ligarObserverEsconderMaster, 500);
+    return;
+  }
+
+  window.__obsHideMasterBtn = new MutationObserver(() => {
+    try { esconderTrocaSenhaMasterForaDaStronda(); } catch {}
+  });
+
+  window.__obsHideMasterBtn.observe(menu, {
+    childList: true,
+    subtree: true,
+  });
+
+  try { esconderTrocaSenhaMasterForaDaStronda(); } catch {}
+}
+
+
+function nomeEmpresaAtual() {
+  const emp = String(empresaAtualId || EMPRESA_PRINCIPAL_ID).toUpperCase();
+  if (emp === EMPRESA_PRINCIPAL_ID.toUpperCase()) return EMPRESA_PRINCIPAL_NOME;
+  return emp;
+}
+
+async function atualizarNomeEmpresaNaTela() {
+  const el = document.getElementById("empresaNomeTopo"); // <- TROQUE pro seu ID real
+  if (!el) return;
+
+  // se tiver função de nome bonito no Firestore, usa ela:
+  if (typeof getNomeBonitoEmpresa === "function") {
+    const bonito = await getNomeBonitoEmpresa(empresaAtualId || EMPRESA_PRINCIPAL_ID);
+    el.textContent = (bonito || nomeEmpresaAtual()).toUpperCase();
+    return;
+  }
+
+  el.textContent = nomeEmpresaAtual().toUpperCase();
+}
+
+
+
+function labelDeposito() {
+  const empId = String(empresaAtualId || EMPRESA_PRINCIPAL_ID).toUpperCase();
+  if (empId === EMPRESA_PRINCIPAL_ID.toUpperCase()) {
+    return `DEPOSITO ${EMPRESA_PRINCIPAL_NOME.toUpperCase()}`;
+  }
+  return `DEPOSITO ${empId}`;
+}
+
+
+async function labelDepositoAsync() {
+  const empId = String(empresaAtualId || EMPRESA_PRINCIPAL_ID).toUpperCase();
+  const nome = await getNomeBonitoEmpresa(empId);
+  return `DEPOSITO ${String(nome || empId).toUpperCase()}`;
 }
 
 
 
 
-function setEmpresaAtual(empresaId){
-  empresaAtualId = String(empresaId || "").trim().toUpperCase();
+function isDepositoStatus(st) {
+  return normalizarStatus(st) === "DEPOSITO";
+}
 
-  // ✅ salva a empresa escolhida (pra não sumir quando abrir de novo)
+
+function abrirFechamentoCaixa() {
+  if (!exigirAdmin()) return;
+  abrir("fechamentoCaixa");
+  setPeriodoHojeFechamento();
+  ligarEventosFechamentoCaixa();
+  renderFechamentoCaixa();
+}
+
+
+window.abrirFechamentoCaixa = abrirFechamentoCaixa;
+
+
+function setEmpresaAtual(empresaId) {
+  empresaAtualId = normalizaEmpresaId(empresaId || EMPRESA_PRINCIPAL_ID);
+  empresaAtual = empresaAtualId;
   localStorage.setItem("empresaAtualId", empresaAtualId);
 
-  // ✅ caminho do Firestore
+  // ✅ ZERA DADOS ANTIGOS (pra não mostrar STRONDA em empresa vazia)
+  maquinas = null;      // null = "carregando..."
+  usuarios = [];
+  acertos = [];
+  ocorrencias = [];
+  empresaPerfil = {};
+
+  // ✅ docRef da empresa atual
   docRef = doc(db, "empresas", empresaAtualId, "dados", "app");
+
+  // atualiza nome no topo (se existir)
+  try { atualizarNomeEmpresaNaTela(); } catch {}
+
+  window.empresaAtualId = empresaAtualId;
+  window.maquinas = maquinas;
+  return empresaAtualId;
 }
+
+
+
+window.abrirRota = async function abrirRota(id) {
+  const rota = (rotas || []).find(r => String(r.id) === String(id));
+  if (!rota) {
+    alert("❌ Rota não encontrada.");
+    return;
+  }
+
+  window.rotaAbertaId = id;
+
+  abrir("rotaDetalhe");
+
+  const titulo = document.getElementById("tituloRotaDetalhe");
+  const ul = document.getElementById("listaMaquinasRotaDetalhe");
+
+  const nomeRota = String(rota.nome || "").toUpperCase();
+const faltamTopo = contarPendentesDaRota(nomeRota);
+
+if (titulo) {
+  titulo.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+      <span>📍 Máquinas da rota: ${nomeRota}</span>
+      <span style="
+        padding:8px 12px;
+        border-radius:999px;
+        background:${faltamTopo > 0 ? "#fcd34d" : "#14532d"};
+        color:${faltamTopo > 0 ? "#ef4444" : "#86efac"};
+        font-weight:900;
+        font-size:13px;
+        white-space:nowrap;
+      ">
+        ${faltamTopo > 0 ? `FALTAM ${faltamTopo}` : "ROTA CONCLUÍDA ✅"}
+      </span>
+    </div>
+  `;
+}
+  
+  if (!ul) return;
+
+  ul.innerHTML = "<li>⏳ Organizando rota...</li>";
+
+  const agora = new Date();
+  const mesAtual = agora.getMonth();
+  const anoAtual = agora.getFullYear();
+
+  let lista = (maquinas || []).filter(m =>
+    String(m.rota || "").trim().toUpperCase() === String(rota.nome || "").trim().toUpperCase()
+  );
+
+  // só pendentes
+  lista = lista.filter((m) => {
+    const teveAcerto = (acertos || []).some((a) => {
+      const d = new Date(a.data);
+      return (
+        String(a.numero || "").trim().toUpperCase() === String(m.numero || "").trim().toUpperCase() &&
+        d.getMonth() === mesAtual &&
+        d.getFullYear() === anoAtual
+      );
+    });
+
+    return !teveAcerto;
+  });
+
+  if (!lista.length) {
+    ul.innerHTML = "<li>✅ Nenhuma máquina pendente nessa rota.</li>";
+    return;
+  }
+
+  // tenta pegar localização atual
+  let origemAtual = null;
+  try {
+    origemAtual = await obterLocalizacaoAtualRota();
+  } catch (e) {
+    origemAtual = null;
+  }
+
+  // organiza:
+  // - com GPS por proximidade se tiver origem
+  // - sem GPS no final
+  // - se não tiver origem, tudo por número
+  lista = ordenarMaquinasDaRota(lista, origemAtual);
+
+  ul.innerHTML = "";
+
+lista.forEach((m) => {
+  const li = document.createElement("li");
+  li.style.position = "relative";
+  li.style.padding = "14px 52px 14px 14px";
+  li.style.marginBottom = "12px";
+  li.style.borderRadius = "16px";
+  li.style.background = "#0b1733";
+  li.style.listStyle = "none";
+  li.style.cursor = "pointer";
+
+  const lat = m.lat ?? m.latitude ?? null;
+  const lng = m.lng ?? m.longitude ?? null;
+  const temGPS = lat != null && lng != null && String(lat) !== "" && String(lng) !== "";
+
+  // clicar no card abre ACERTO
+  li.onclick = () => {
+    abrir("acerto");
+
+    const n = document.getElementById("numAcerto");
+    const e = document.getElementById("estabAcerto");
+
+    if (n) n.value = String(m.numero || "").toUpperCase();
+    if (e) e.value = String(m.estab || "").toUpperCase();
+
+    try { autoPorNumero(); } catch {}
+  };
+
+  const nome = document.createElement("div");
+  nome.textContent = String(m.estab || "").toUpperCase();
+  nome.style.fontWeight = "900";
+  nome.style.fontSize = "16px";
+  nome.style.lineHeight = "1.2";
+  nome.style.paddingRight = "6px";
+  nome.style.wordBreak = "break-word";
+
+  const jb = document.createElement("div");
+  jb.textContent = `JB Nº ${String(m.numero || "").toUpperCase()}`;
+  jb.style.marginTop = "4px";
+  jb.style.fontWeight = "700";
+  jb.style.fontSize = "14px";
+  jb.style.opacity = ".95";
+
+  const status = document.createElement("div");
+status.textContent = "🟡";
+status.style.marginTop = "8px";
+status.style.color = "#facc15";
+status.style.fontWeight = "900";
+status.style.fontSize = "18px";
+status.style.lineHeight = "1";
+
+  const gps = document.createElement("div");
+  gps.textContent = temGPS ? "📍 COM LOCALIZAÇÃO" : "📍 SEM LOCALIZAÇÃO";
+  gps.style.marginTop = "4px";
+  gps.style.fontSize = "11px";
+  gps.style.opacity = ".85";
+
+  // botão pequeno no canto
+  const btnMapa = document.createElement("button");
+  btnMapa.type = "button";
+  btnMapa.textContent = "📍";
+  btnMapa.title = "Abrir localização";
+  btnMapa.style.position = "absolute";
+  btnMapa.style.top = "12px";
+  btnMapa.style.right = "12px";
+  btnMapa.style.width = "34px";
+  btnMapa.style.height = "34px";
+  btnMapa.style.minWidth = "34px";
+  btnMapa.style.padding = "0";
+  btnMapa.style.borderRadius = "10px";
+  btnMapa.style.display = "flex";
+  btnMapa.style.alignItems = "center";
+  btnMapa.style.justifyContent = "center";
+  btnMapa.style.fontSize = "16px";
+  btnMapa.style.lineHeight = "1";
+  btnMapa.style.cursor = "pointer";
+
+  btnMapa.onclick = (ev) => {
+    ev.stopPropagation();
+
+    if (!temGPS) {
+      alert("❌ Essa máquina não tem localização salva.");
+      return;
+    }
+
+    abrirGoogleMaps(lat, lng);
+  };
+
+  li.appendChild(nome);
+  li.appendChild(jb);
+  li.appendChild(status);
+  li.appendChild(gps);
+  li.appendChild(btnMapa);
+
+  ul.appendChild(li);
+});
+};
+
+function obterLocalizacaoAtualRota() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      return reject(new Error("Geolocalização não suportada."));
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        resolve({
+          lat: Number(pos.coords.latitude),
+          lng: Number(pos.coords.longitude)
+        });
+      },
+      (err) => {
+        reject(err);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
+      }
+    );
+  });
+}
+
+
+window.editarRota = async function editarRota(id) {
+  if (!confirmarSenhaAdminRotas()) return;
+
+  const rota = (rotas || []).find(r => String(r.id) === String(id));
+  if (!rota) {
+    alert("❌ Rota não encontrada.");
+    return;
+  }
+
+  const novoNome = prompt("Digite o novo nome da rota:", String(rota.nome || ""));
+  if (novoNome === null) return;
+
+  const nome = String(novoNome || "").trim().toUpperCase();
+  if (!nome) {
+    alert("❌ Nome inválido.");
+    return;
+  }
+
+  const duplicada = (rotas || []).some(r =>
+    String(r.id) !== String(id) &&
+    String(r.nome || "").trim().toUpperCase() === nome
+  );
+
+  if (duplicada) {
+    alert("⚠️ Já existe outra rota com esse nome.");
+    return;
+  }
+
+  const nomeAntigo = String(rota.nome || "").trim().toUpperCase();
+  rota.nome = nome;
+
+  (maquinas || []).forEach(m => {
+    if (String(m.rota || "").trim().toUpperCase() === nomeAntigo) {
+      m.rota = nome;
+    }
+  });
+
+  const ok = await salvarNoFirebase(true);
+  if (!ok) {
+    alert("❌ Não consegui editar a rota.");
+    return;
+  }
+
+  try { renderRotas(); } catch {}
+  try { preencherSelectRotas(); } catch {}
+  try { abrirRota(id); } catch {}
+
+  alert("✅ Rota editada com sucesso.");
+};
+
+
+window.confirmarSenhaAdminRotas = function confirmarSenhaAdminRotas() {
+  if (!exigirAdmin()) return false;
+
+  const userLogado = String(sessaoUsuario?.user || "").trim().toLowerCase();
+  const admin = (usuarios || []).find(u =>
+    String(u.user || "").trim().toLowerCase() === userLogado
+  );
+
+  if (!admin) {
+    alert("❌ Administrador logado não encontrado.");
+    return false;
+  }
+
+  const digitada = prompt("Digite a senha do administrador:");
+  if (digitada === null) return false;
+
+  const senhaCerta = String(admin.senha || "");
+  if (String(digitada) !== senhaCerta) {
+    alert("❌ Senha do administrador incorreta.");
+    return false;
+  }
+
+  return true;
+};
+
+
+window.apagarRota = async function apagarRota(id) {
+  if (!confirmarSenhaAdminRotas()) return;
+
+  const rota = (rotas || []).find(r => String(r.id) === String(id));
+  if (!rota) {
+    alert("❌ Rota não encontrada.");
+    return;
+  }
+
+  const nome = String(rota.nome || "").trim().toUpperCase();
+
+  const usadas = (maquinas || []).some(m =>
+    String(m.rota || "").trim().toUpperCase() === nome
+  );
+
+  if (usadas) {
+    const confirmar = confirm(
+      `A rota ${nome} está vinculada a máquinas.\n\nDeseja apagar a rota e remover essa rota das máquinas?`
+    );
+    if (!confirmar) return;
+
+    (maquinas || []).forEach(m => {
+      if (String(m.rota || "").trim().toUpperCase() === nome) {
+        m.rota = "";
+      }
+    });
+  } else {
+    if (!confirm(`Deseja apagar a rota ${nome}?`)) return;
+  }
+
+  rotas = (rotas || []).filter(r => String(r.id) !== String(id));
+  window.rotas = rotas;
+
+  const ok = await salvarNoFirebase(true);
+  if (!ok) {
+    alert("❌ Não consegui apagar a rota.");
+    return;
+  }
+
+  const titulo = document.getElementById("tituloRotaAberta");
+  const ul = document.getElementById("listaMaquinasRota");
+  if (titulo) titulo.textContent = "📍 Máquinas da rota";
+  if (ul) ul.innerHTML = "";
+
+  try { renderRotas(); } catch {}
+  try { preencherSelectRotas(); } catch {}
+
+  alert("✅ Rota apagada com sucesso.");
+};
+
+
 
 
 
@@ -147,120 +1020,14 @@ async function garantirDocExiste() {
 let ocorrencias = [];
 let maquinas = [];
 let acertos = [];
+let inicioPixAtual = "";
+let fimPixAtual = "";
+let pixMaquinaIdAtual = "";
 let usuarios = [];
+let rotas = [];
 let sessaoUsuario = null;
 let firebasePronto = false;
 let __savePendente = false;
-
-
-// =====================
-// ✅ BACKUP LOCAL (anti-perda)
-// =====================
-function keyBackupEmpresa() {
-  const emp = String(empresaAtualId || "STRONDA").toUpperCase();
-  return "BACKUP_EMPRESA_" + emp;
-}
-
-// ====== OCORRÊNCIA PÚBLICA (TELA LOGIN) ======
-const pubEmpresa = document.getElementById("pubOcEmpresa");
-const pubNum = document.getElementById("pubOcNum");
-const pubEstab = document.getElementById("pubOcEstab");
-
-async function buscarEstabPorEmpresaENumero(empId, num) {
-  empId = String(empId || "").trim().toUpperCase();
-  num = String(num || "").trim().toUpperCase();
-  if (!empId || !num) return "";
-
-  try {
-    // ✅ CACHE: 1 leitura por minuto por empresa (em vez de toda digitação)
-    const cached = __cacheEmpresaData.get(empId);
-    if (cached && (Date.now() - cached.at) < __cacheTTLms) {
-      const maquinasEmp = Array.isArray(cached.data.maquinas) ? cached.data.maquinas : [];
-      const m = maquinasEmp.find(x => String(x.numero || "").trim().toUpperCase() === num);
-      return m ? String(m.estab || "").trim().toUpperCase() : "";
-    }
-
-    const ref = doc(db, "empresas", empId, "dados", "app");
-    const snap = await getDoc(ref);
-    if (!snap.exists()) return "";
-
-    const data = snap.data() || {};
-    __cacheEmpresaData.set(empId, { data, at: Date.now() });
-
-    const maquinasEmp = Array.isArray(data.maquinas) ? data.maquinas : [];
-    const m = maquinasEmp.find(x => String(x.numero || "").trim().toUpperCase() === num);
-    return m ? String(m.estab || "").trim().toUpperCase() : "";
-  } catch (e) {
-    console.error("buscarEstabPorEmpresaENumero erro:", e);
-    return "";
-  }
-}
-
-async function carregarDadosUmaVezParaLogin() {
-  try {
-    await ensureAuth();
-    if (!docRef) throw new Error("docRef está null. Chame setEmpresaAtual() antes.");
-
-    const emp = String(empresaAtualId || "").toUpperCase();
-    const now = Date.now();
-
-    // ✅ evita spam de leitura no login
-    if (__preloadEmpresa === emp && (now - __preloadAt) < __preloadCooldownMs) {
-      firebasePronto = true;
-      habilitarBotaoLogin();
-      return;
-    }
-    __preloadEmpresa = emp;
-    __preloadAt = now;
-
-    const snap = await getDoc(docRef);
-    if (!snap.exists()) {
-      await setDoc(docRef, {
-        atualizadoEm: new Date().toISOString(),
-        ocorrencias: [],
-        maquinas: [],
-        acertos: [],
-        usuarios: []
-      });
-    }
-
-    const snap2 = snap.exists() ? snap : await getDoc(docRef);
-    const data = snap2.exists() ? (snap2.data() || {}) : {};
-
-    if (Array.isArray(data.ocorrencias)) ocorrencias = data.ocorrencias;
-    if (Array.isArray(data.maquinas))    maquinas    = data.maquinas.map(normalizarGPSMaquina);
-    if (Array.isArray(data.acertos))     acertos     = data.acertos;
-    if (Array.isArray(data.usuarios))    usuarios    = data.usuarios;
-
-    salvarBackupLocal();
-
-    firebasePronto = true;
-    habilitarBotaoLogin();
-  } catch (e) {
-    console.error("carregarDadosUmaVezParaLogin erro:", e);
-
-    // se quota estourou, entra offline
-    if (isQuotaErr(e)) {
-      entrarModoOfflinePorQuota(e);
-      return;
-    }
-
-    const ok = carregarBackupLocal();
-    firebasePronto = true;
-    habilitarBotaoLogin();
-
-    if (!ok) {
-      alert("❌ Não consegui carregar dados do Firebase e não achei backup local.\n\n" + (e?.message || e));
-    } else {
-      alert("⚠️ Firebase falhou. Carreguei seus dados do backup local.\n\n" + (e?.message || e));
-      try { listarMaquinas(); } catch {}
-      try { atualizarStatus(); } catch {}
-      try { listarOcorrencias(); } catch {}
-    }
-  }
-}
-
-
 
 
 // ==========================
@@ -299,20 +1066,424 @@ function crAutoPorNumero() {
 }
 
 function pararSnapshotAtual() {
-  if (typeof unsubSnapshot === "function") {
-    try { unsubSnapshot(); } catch {}
-  }
+  try {
+    if (typeof unsubSnapshot === "function") unsubSnapshot();
+  } catch {}
   unsubSnapshot = null;
   __syncAtivo = false;
-  __syncIniciando = false;
+}
+
+function numJB(v) {
+  const m = String(v ?? "").match(/\d+/);
+  return m ? parseInt(m[0], 10) : 0;
+}
+
+
+function distanciaKm(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng / 2) * Math.sin(dLng / 2);
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c;
+}
+
+function ordenarMaquinasDaRota(lista, origem = null) {
+  const comGps = lista.filter(m => m.lat != null && m.lng != null);
+  const semGps = lista.filter(m => m.lat == null || m.lng == null);
+
+  if (!origem || !comGps.length) {
+    return [...lista].sort((a, b) => numJB(a.numero) - numJB(b.numero));
+  }
+
+  const pendentes = [...comGps];
+  const ordem = [];
+
+  let atual = { lat: Number(origem.lat), lng: Number(origem.lng) };
+
+  while (pendentes.length) {
+    let idxMelhor = 0;
+    let menor = Infinity;
+
+    for (let i = 0; i < pendentes.length; i++) {
+      const m = pendentes[i];
+      const d = distanciaKm(atual.lat, atual.lng, Number(m.lat), Number(m.lng));
+
+      if (d < menor) {
+        menor = d;
+        idxMelhor = i;
+      }
+    }
+
+    const prox = pendentes.splice(idxMelhor, 1)[0];
+    ordem.push(prox);
+
+    atual = {
+      lat: Number(prox.lat),
+      lng: Number(prox.lng)
+    };
+  }
+
+  semGps.sort((a, b) => numJB(a.numero) - numJB(b.numero));
+
+  return [...ordem, ...semGps];
 }
 
 
 
+window.criarRota = async function criarRota() {
+  const inp = document.getElementById("rotaNome");
+  if (!inp) {
+    alert("❌ Campo da rota não encontrado.");
+    return;
+  }
 
-// =====================
-// ✅ STATUS DE ACERTOS
-// =====================
+  const nome = String(inp.value || "").trim().toUpperCase();
+  if (!nome) {
+    alert("❌ Digite o nome da rota.");
+    return;
+  }
+
+  rotas = Array.isArray(rotas) ? rotas : [];
+
+  const existe = rotas.some(r => String(r.nome || "").trim().toUpperCase() === nome);
+  if (existe) {
+    alert("⚠️ Essa rota já existe.");
+    return;
+  }
+
+  rotas.push({
+    id: Date.now(),
+    nome,
+    criadaEm: new Date().toISOString()
+  });
+
+  const ok = await salvarNoFirebase(true);
+  if (!ok) {
+    rotas = rotas.filter(r => String(r.nome || "") !== nome);
+    alert("❌ Não consegui salvar a rota.");
+    return;
+  }
+
+  inp.value = "";
+  try { renderRotas(); } catch {}
+  try { preencherSelectRotas(); } catch {}
+
+  alert("✅ Rota salva com sucesso!");
+};
+
+
+function contarPendentesDaRota(nomeRota) {
+  const agora = new Date();
+  const mesAtual = agora.getMonth();
+  const anoAtual = agora.getFullYear();
+
+  const lista = (maquinas || []).filter(m =>
+    String(m.rota || "").trim().toUpperCase() === String(nomeRota || "").trim().toUpperCase()
+  );
+
+  return lista.filter((m) => {
+    const teveAcerto = (acertos || []).some((a) => {
+      const d = new Date(a.data);
+      return (
+        String(a.numero || "").trim().toUpperCase() === String(m.numero || "").trim().toUpperCase() &&
+        d.getMonth() === mesAtual &&
+        d.getFullYear() === anoAtual
+      );
+    });
+
+    return !teveAcerto;
+  }).length;
+}
+
+
+window.renderRotas = function renderRotas() {
+  const ul = document.getElementById("listaRotas");
+  if (!ul) return;
+
+  ul.innerHTML = "";
+  ul.style.padding = "0";
+  ul.style.margin = "0";
+
+  const lista = Array.isArray(rotas) ? [...rotas] : [];
+
+  lista.sort((a, b) =>
+    String(a.nome || "").localeCompare(String(b.nome || ""), "pt-BR", { sensitivity: "base" })
+  );
+
+  if (!lista.length) {
+    ul.innerHTML = "<li>❌ Nenhuma rota cadastrada.</li>";
+    return;
+  }
+
+  lista.forEach((r) => {
+    const nomeRota = String(r.nome || "").toUpperCase();
+    const faltam = contarPendentesDaRota(nomeRota);
+
+    const li = document.createElement("li");
+    li.style.listStyle = "none";
+    li.style.background = "#0b1733";
+    li.style.borderRadius = "16px";
+    li.style.padding = "14px";
+    li.style.marginBottom = "12px";
+
+    const topo = document.createElement("div");
+    topo.style.display = "flex";
+    topo.style.alignItems = "center";
+    topo.style.justifyContent = "space-between";
+    topo.style.gap = "12px";
+    topo.style.flexWrap = "wrap";
+    topo.style.marginBottom = "14px";
+
+    const nome = document.createElement("div");
+    nome.textContent = nomeRota;
+    nome.style.fontWeight = "900";
+    nome.style.fontSize = "22px";
+    nome.style.lineHeight = "1.1";
+    nome.style.wordBreak = "break-word";
+
+    const badge = document.createElement("div");
+
+if (faltam > 0) {
+  badge.textContent = `FALTAM: ${faltam}`;
+  badge.style.background = "#fcd34d"; // amarelo equilibrado
+  badge.style.color = "#991b1b"; // vermelho elegante
+} else {
+  badge.textContent = "ROTA CONCLUÍDA ✅";
+  badge.style.background = "#14532d";
+  badge.style.color = "#86efac";
+}
+
+badge.style.padding = "8px 12px";
+badge.style.borderRadius = "999px";
+badge.style.fontWeight = "900";
+badge.style.fontSize = "13px";
+badge.style.whiteSpace = "nowrap";
+
+
+    topo.appendChild(nome);
+    topo.appendChild(badge);
+
+    const acoes = document.createElement("div");
+    acoes.style.display = "grid";
+    acoes.style.gridTemplateColumns = "1fr";
+    acoes.style.gap = "10px";
+
+    const btnAbrir = document.createElement("button");
+    btnAbrir.type = "button";
+    btnAbrir.textContent = "ABRIR";
+    btnAbrir.style.width = "100%";
+    btnAbrir.onclick = () => abrirRota(r.id);
+
+    const btnEditar = document.createElement("button");
+    btnEditar.type = "button";
+    btnEditar.textContent = "EDITAR";
+    btnEditar.style.width = "100%";
+    btnEditar.onclick = () => editarRota(r.id);
+
+    const btnApagar = document.createElement("button");
+    btnApagar.type = "button";
+    btnApagar.textContent = "APAGAR";
+    btnApagar.style.width = "100%";
+    btnApagar.onclick = () => apagarRota(r.id);
+
+    acoes.appendChild(btnAbrir);
+    acoes.appendChild(btnEditar);
+    acoes.appendChild(btnApagar);
+
+    li.appendChild(topo);
+    li.appendChild(acoes);
+
+    ul.appendChild(li);
+  });
+};
+
+
+window.preencherSelectRotas = function preencherSelectRotas(valorAtual = "") {
+  const sel = document.getElementById("detRota");
+  if (!sel) return;
+
+  const atual = String(valorAtual || sel.value || "").toUpperCase();
+
+  sel.innerHTML = `<option value="">SEM ROTA</option>`;
+
+  const lista = Array.isArray(rotas) ? [...rotas] : [];
+  lista.sort((a, b) =>
+    String(a.nome || "").localeCompare(String(b.nome || ""), "pt-BR", { sensitivity: "base" })
+  );
+
+  lista.forEach((r) => {
+    const op = document.createElement("option");
+    op.value = String(r.nome || "").toUpperCase();
+    op.textContent = String(r.nome || "").toUpperCase();
+
+    if (op.value === atual) op.selected = true;
+
+    sel.appendChild(op);
+  });
+};
+
+
+
+function aplicarDadosDoFirestore(data) {
+  maquinas      = Array.isArray(data.maquinas) ? data.maquinas : [];
+  usuarios      = Array.isArray(data.usuarios) ? data.usuarios : [];
+  acertos       = Array.isArray(data.acertos) ? data.acertos : [];
+  ocorrencias   = Array.isArray(data.ocorrencias) ? data.ocorrencias : [];
+  rotas         = Array.isArray(data.rotas) ? data.rotas : [];
+  empresaPerfil = (data.empresaPerfil && typeof data.empresaPerfil === "object") ? data.empresaPerfil : {};
+
+  window.maquinas = maquinas;
+  window.rotas = rotas;
+  window.empresaAtualId = empresaAtualId;
+
+  try { renderRotas(); } catch {}
+  try { preencherSelectRotas(); } catch {}
+}
+
+
+function abrirTelaRotas() {
+  try { renderRotas(); } catch {}
+  try { preencherSelectRotas(); } catch {}
+  abrir("rotas");
+}
+window.abrirTelaRotas = abrirTelaRotas;
+
+
+
+function formatJB(v) {
+  const n = numJB(v);
+  return n ? `JB Nº ${n}` : `JB Nº ${String(v || "").toUpperCase()}`;
+}
+
+function abrirGoogleMaps(lat, lng) {
+  const la = Number(String(lat).replace(",", "."));
+  const ln = Number(String(lng).replace(",", "."));
+  if (!Number.isFinite(la) || !Number.isFinite(ln)) {
+    alert("❌ GPS inválido.");
+    return;
+  }
+
+  const ua = navigator.userAgent || "";
+  const isAndroid = /Android/i.test(ua);
+  const isIOS = /iPhone|iPad|iPod/i.test(ua);
+
+  if (isAndroid) {
+    location.href = `geo:${la},${ln}?q=${la},${ln}`;
+    return;
+  }
+
+  if (isIOS) {
+    location.href = `comgooglemaps://?q=${la},${ln}&center=${la},${ln}&zoom=16`;
+    setTimeout(() => {
+      window.open(`https://www.google.com/maps?q=${la},${ln}`, "_blank", "noopener,noreferrer");
+    }, 400);
+    return;
+  }
+
+  window.open(`https://www.google.com/maps?q=${la},${ln}`, "_blank", "noopener,noreferrer");
+}
+
+function monthStartEnd(ref = new Date()) {
+  const y = ref.getFullYear();
+  const m = ref.getMonth();
+  return {
+    start: new Date(y, m, 1, 0, 0, 0, 0),
+    end:   new Date(y, m + 1, 0, 23, 59, 59, 999),
+  };
+}
+
+function parseDataLocalSemTZ(s) {
+  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return null;
+  return new Date(+m[1], +m[2] - 1, +m[3], 12, 0, 0);
+}
+
+function abrirAcertosDoEstabelecimentoNoMes(estabKey, jbNum) {
+  const U = (v) => String(v || "").trim().toUpperCase();
+  const { start, end } = monthStartEnd(new Date());
+
+  const lista = (acertos || []).filter(a => {
+    const d = parseDataLocalSemTZ(a.data);
+    if (!d || d < start || d > end) return false;
+    const aEst = U(a.estab || a.estabelecimento || a.nomeEstabelecimento);
+    const aNum = U(a.numero || a.num || a.jb);
+    if (estabKey) return aEst === U(estabKey);
+    if (jbNum) return aNum === U(jbNum);
+    return false;
+  });
+
+  try { document.getElementById("__ov_status__")?.remove(); } catch {}
+
+  const ov = document.createElement("div");
+  ov.id = "__ov_status__";
+  ov.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:999999;display:flex;align-items:center;justify-content:center;";
+
+  const box = document.createElement("div");
+  box.style.cssText = "width:540px;max-width:94%;max-height:88vh;overflow:auto;background:#0f172a;color:#fff;border-radius:14px;padding:16px;box-shadow:0 10px 25px rgba(0,0,0,.35)";
+
+  box.innerHTML = `
+    <div style="font-weight:900;font-size:16px;">🏢 ${U(estabKey || "SEM ESTAB")}</div>
+    <div style="opacity:.85;font-size:13px;margin:6px 0 12px 0;">${jbNum ? ("JB: " + U(jbNum)) : ""}</div>
+    <div style="opacity:.85;font-size:12px;margin-bottom:12px;">
+      📅 Mês atual: ${start.toLocaleDateString("pt-BR")} até ${end.toLocaleDateString("pt-BR")}
+    </div>
+
+    <div style="background:#111827;border-radius:12px;padding:12px;margin-bottom:12px;">
+      ✅ <b>Qtd de acertos no mês:</b> ${lista.length}
+    </div>
+
+    <div id="__ov_status_lista__"></div>
+
+    <button type="button" style="width:100%;margin-top:12px;padding:12px;border:none;border-radius:10px;font-weight:900;cursor:pointer;background:#334155;color:#fff;">
+      Fechar
+    </button>
+  `;
+
+  const listEl = box.querySelector("#__ov_status_lista__");
+
+  if (!lista.length) {
+    listEl.innerHTML = `<div style="opacity:.9;">❌ Nenhum acerto no mês.</div>`;
+  } else {
+    listEl.innerHTML = lista
+      .slice()
+      .sort((a,b)=> new Date(b.data) - new Date(a.data))
+      .map(a=>{
+        const d = new Date(a.data);
+        const empresa = Number(a.empresa || 0);
+        const pix = Number(a.pix || 0);
+        const esp = Number(a.dinheiro || a.especie || 0);
+        return `
+          <div style="background:#0b1220;padding:10px;border-radius:12px;margin:8px 0;">
+            <div style="font-weight:900;">📌 ${d.toLocaleDateString("pt-BR")}</div>
+            <div style="opacity:.9;font-size:13px;">
+              🏢 Empresa: R$ ${empresa.toFixed(2)}<br>
+              💳 PIX: R$ ${pix.toFixed(2)}<br>
+              💵 Espécie: R$ ${esp.toFixed(2)}
+            </div>
+          </div>
+        `;
+      }).join("");
+  }
+
+  box.querySelector("button").onclick = () => ov.remove();
+
+  ov.appendChild(box);
+  document.body.appendChild(ov);
+
+  ov.addEventListener("click", () => ov.remove());
+  box.addEventListener("click", (e) => e.stopPropagation());
+}
+
+
+
 function atualizarStatus() {
   const listaStatus = document.getElementById("listaStatus");
   if (!listaStatus) return;
@@ -328,22 +1499,58 @@ function atualizarStatus() {
   const mesAtual = agora.getMonth();
   const anoAtual = agora.getFullYear();
 
-  // ✅ só máquinas que NÃO são depósito
-  const ativas = (maquinas || []).filter(m => normalizarStatus(m.status) !== "DEPOSITO");
+  // 🔥 resumo topo (2 cards) - mantém
+  let resumo = document.getElementById("resumoStatusTopo");
+  if (!resumo) {
+    resumo = document.createElement("div");
+    resumo.id = "resumoStatusTopo";
+    resumo.style.display = "flex";
+    resumo.style.gap = "12px";
+    resumo.style.margin = "12px 0 16px 0";
 
-  // ✅ 1 por estabelecimento
+    resumo.innerHTML = `
+      <div style="flex:1; background:#0f172a; padding:14px; border-radius:12px;">
+        <div style="font-weight:900; color:#22c55e;">🟢 ACERTADAS (MÊS)</div>
+        <div id="qtdStatusVerde" style="font-size:32px; font-weight:900; margin-top:6px;">0</div>
+      </div>
+
+      <div style="flex:1; background:#0f172a; padding:14px; border-radius:12px;">
+        <div style="font-weight:900; color:#ef4444;">🔴 NÃO PASSOU (MÊS)</div>
+        <div id="qtdStatusVermelha" style="font-size:32px; font-weight:900; margin-top:6px;">0</div>
+      </div>
+    `;
+
+    listaStatus.parentElement.insertBefore(resumo, listaStatus);
+  }
+
+  // ✅ tira depósito
+  const ativas = (maquinas || []).filter(m => {
+    const st = String(m.status || "").toUpperCase();
+    return !st.includes("DEP");
+  });
+
+  // 1 por estabelecimento
   const unicos = new Map();
   ativas.forEach(m => {
     const key = String(m.estab || "").toUpperCase().trim();
+    if (!key) return;
     if (!unicos.has(key)) unicos.set(key, m);
   });
 
   const lista = [...unicos.values()];
+  lista.sort((a, b) => numJB(a.numero) - numJB(b.numero));
 
   if (!lista.length) {
-    listaStatus.innerHTML = "<li>✅ Nenhuma máquina ALUGADA</li>";
-    return;
-  }
+  const elV = document.getElementById("qtdStatusVerde");
+  const elR = document.getElementById("qtdStatusVermelha");
+  if (elV) elV.textContent = "0";
+  if (elR) elR.textContent = "0";
+
+  listaStatus.innerHTML = "<li>✅ Nenhuma máquina ativa para mostrar.</li>";
+  return;
+}
+
+  let totalVerdes = 0;
 
   lista.forEach((m) => {
     const estabKey = String(m.estab || "").toUpperCase().trim();
@@ -357,96 +1564,107 @@ function atualizarStatus() {
       );
     });
 
+    const alugadaEm = m.alugadaEm ? new Date(m.alugadaEm) : null;
+
+const alugadaNesteMes =
+  alugadaEm &&
+  alugadaEm.getMonth() === mesAtual &&
+  alugadaEm.getFullYear() === anoAtual;
+
+if (teveAcerto || alugadaNesteMes) totalVerdes++;
+
+    const lat = m.lat ?? m.latitude ?? null;
+    const lng = m.lng ?? m.longitude ?? null;
+    const temGPS = lat != null && lng != null && String(lat) !== "" && String(lng) !== "";
+
     const li = document.createElement("li");
     li.style.position = "relative";
     li.style.borderRadius = "12px";
     li.style.background = "#0f172a";
     li.style.cursor = "pointer";
     li.style.marginBottom = "10px";
-
-    // ✅ reserva espaço pro botão 📍 no canto direito
     li.style.padding = "14px 44px 14px 14px";
 
-    // ✅ linha única, usando o espaço todo
+    // ✅ clique no card = abrir acertos do mês
+    li.addEventListener("click", () => {
+      abrirAcertosDoEstabelecimentoNoMes(estabKey, m.numero);
+    });
+
     const linha = document.createElement("div");
     linha.style.display = "flex";
     linha.style.alignItems = "center";
     linha.style.gap = "10px";
-    linha.style.whiteSpace = "nowrap";
-    linha.style.overflow = "hidden";
-    linha.style.textOverflow = "ellipsis";
 
-    // bolinha status
     const bol = document.createElement("span");
-    bol.textContent = teveAcerto ? "🟢" : "🔴";
-    bol.style.flex = "0 0 auto";
+    bol.textContent = (teveAcerto || alugadaNesteMes) ? "🟢" : "🔴";
 
-    // texto principal: ESTABELECIMENTO
     const nome = document.createElement("span");
     nome.textContent = estabKey;
     nome.style.fontWeight = "900";
-    nome.style.fontSize = "16px";
-    nome.style.flex = "1 1 auto";
-    nome.style.overflow = "hidden";
-    nome.style.textOverflow = "ellipsis";
+    nome.style.flex = "1";
 
-    // texto secundário: JB Nº
     const jb = document.createElement("span");
-    jb.textContent = `JB Nº ${String(m.numero || "").toUpperCase()}`;
+    jb.textContent = formatJB(m.numero);
     jb.style.fontWeight = "800";
-    jb.style.fontSize = "14px";
-    jb.style.opacity = "0.9";
-    jb.style.flex = "0 0 auto";
 
     linha.appendChild(bol);
     linha.appendChild(nome);
     linha.appendChild(jb);
-
-    // clicar no card abre detalhes
-    li.onclick = () => {
-      if (typeof abrirDetalhesCliente === "function") abrirDetalhesCliente(m.estab);
-    };
-
-    // botão GPS pequeno no canto
-    const lat = toNumberCoord(m.lat);
-    const lng = toNumberCoord(m.lng);
-
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.textContent = "📍";
-
-    btn.style.position = "absolute";
-    btn.style.top = "10px";
-    btn.style.right = "10px";
-    btn.style.width = "28px";
-    btn.style.height = "28px";
-    btn.style.border = "none";
-    btn.style.background = "transparent";
-    btn.style.padding = "0";
-    btn.style.margin = "0";
-    btn.style.cursor = "pointer";
-    btn.style.fontSize = "18px";
-    btn.style.lineHeight = "28px";
-    btn.style.opacity = "0.9";
-
-    btn.onclick = (ev) => {
-      ev.preventDefault();
-      ev.stopPropagation(); // não abre detalhes
-      if (lat == null || lng == null) return alert("❌ Sem GPS salvo.");
-      abrirNoMaps(lat, lng);
-    };
-
     li.appendChild(linha);
-    li.appendChild(btn);
+
+    // ✅ pirulito maps (SEM círculo azul)
+    if (temGPS) {
+      const pin = document.createElement("button");
+      pin.type = "button";
+      pin.textContent = "📍";
+      pin.title = "Abrir no Google Maps";
+
+      // posição
+      pin.style.position = "absolute";
+      pin.style.right = "10px";
+      pin.style.top = "50%";
+      pin.style.transform = "translateY(-50%)";
+
+      // ✅ remove círculo/fundo
+      pin.style.background = "transparent";
+      pin.style.border = "none";
+      pin.style.padding = "0";
+      pin.style.margin = "0";
+      pin.style.width = "auto";
+      pin.style.height = "auto";
+      pin.style.borderRadius = "0";
+
+      // aparência
+      pin.style.cursor = "pointer";
+      pin.style.fontSize = "20px";
+      pin.style.lineHeight = "1";
+      pin.style.filter = "drop-shadow(0 1px 1px rgba(0,0,0,.5))"; // opcional
+
+      pin.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation(); // não dispara o clique do card
+        abrirGoogleMaps(lat, lng);
+      });
+
+      li.appendChild(pin);
+    }
+
     listaStatus.appendChild(li);
   });
+
+  const totalLista = lista.length;
+  const totalVermelhas = totalLista - totalVerdes;
+
+  const elV = document.getElementById("qtdStatusVerde");
+  const elR = document.getElementById("qtdStatusVermelha");
+  if (elV) elV.textContent = totalVerdes;
+  if (elR) elR.textContent = totalVermelhas;
 }
 
 
 
-
 // salvar crédito remoto: soma no relógio anterior (ultimoRelogio)
-function salvarCreditoRemoto() {
+async function salvarCreditoRemoto() {
   if (!exigirAdmin()) return;
 
   const num = (document.getElementById("crNum")?.value || "").trim().toUpperCase();
@@ -458,27 +1676,22 @@ function salvarCreditoRemoto() {
   const m = maquinas.find(x => String(x.numero || "").toUpperCase() === num);
   if (!m) return alert("❌ Máquina não encontrada.");
 
-  // relógio atual
   const atual = m.ultimoRelogio != null ? Number(m.ultimoRelogio) : 0;
   const novo = atual + valor;
 
-  // atualiza relógio
   m.ultimoRelogio = novo;
 
-  // registra histórico (opcional, mas recomendado)
   if (!Array.isArray(m.creditosRemotos)) m.creditosRemotos = [];
-
   m.creditosRemotos.push({
     id: Date.now(),
-    valor: valor,
+    valor,
     antes: atual,
     depois: novo,
     data: new Date().toISOString(),
   });
 
-  salvarNoFirebase();
-
-
+  const ok = await salvarNoFirebase(true);
+  if (!ok) return;
 
   alert(`✅ Crédito remoto lançado!\n\n${m.estab}\nJB Nº ${m.numero}\n\nRelógio: ${atual.toFixed(2)} → ${novo.toFixed(2)}`);
 
@@ -498,7 +1711,7 @@ function salvarCreditoRemoto() {
 function definirEmpresa(){
   if (!exigirAdmin()) return;
 
-  const nome = prompt("Nome/ID da empresa (ex: STRONDA, EMPRESA2, etc):");
+  const nome = prompt("Nome/ID da empresa (ex: EMPRESA_PRINCIPAL_ID, EMPRESA2, etc):");
   if (!nome) return;
 
   const empresaId = String(nome).trim().toUpperCase();
@@ -511,10 +1724,48 @@ function definirEmpresa(){
   setEmpresaAtual(empresaId);
 
   firebasePronto = false;
+
   desabilitarBotaoLogin();
   iniciarSincronizacaoFirebase();
 
-  alert("✅ Empresa selecionada: " + empresaId);
+  getNomeBonitoEmpresa(empresaId).then((nome) => {
+  alert("✅ Empresa selecionada: " + (nome || empresaId));
+});
+
+}
+
+
+function garantirIconeOcorrencias() {
+  const b = document.getElementById("btnOcorrencias");
+  if (!b) return;
+
+  // se já tem o ícone, não mexe
+  if (b.querySelector(".ico-ocorr")) return;
+
+  const ico = document.createElement("span");
+  ico.className = "ico-ocorr";
+  ico.textContent = "🛠 ";
+  ico.style.marginRight = "6px";
+
+  // coloca antes do texto (sem mexer no texto que pisca)
+  b.insertBefore(ico, b.firstChild);
+}
+
+function blindarIconeOcorrencias() {
+  // roda agora
+  garantirIconeOcorrencias();
+
+  // evita duplicar observer
+  if (window.__obsIconeOcorrencias) return;
+
+  window.__obsIconeOcorrencias = new MutationObserver(() => {
+    garantirIconeOcorrencias();
+  });
+
+  window.__obsIconeOcorrencias.observe(document.body, {
+    childList: true,
+    subtree: true,
+  });
 }
 
 
@@ -522,7 +1773,7 @@ function desabilitarBotaoLogin() {
   const btn = document.getElementById("btnEntrar");
   if (!btn) return;
   btn.disabled = true;
-  btn.textContent = "⏳ Carregando...";
+  btn.textContent = "⏳ carregando...";
   btn.style.opacity = "0.7";
 }
 
@@ -530,28 +1781,23 @@ function habilitarBotaoLogin() {
   const btn = document.getElementById("btnEntrar");
   if (!btn) return;
   btn.disabled = false;
-  btn.textContent = "Entrar";
+  btn.textContent = "entrar";
   btn.style.opacity = "1";
 }
-
-desabilitarBotaoLogin();
-
 
 
 
 let carregandoDoFirebase = false;
-let __rotinaRodouPorEmpresa = {}; // { "STRONDA": true, ... }
+let __rotinaRodouPorEmpresa = {}; // { "EMPRESA_PRINCIPAL_ID": true, ... }
 
 function rodarRotinasApenasUmaVezPorEmpresa() {
-  const emp = String(empresaAtualId || "STRONDA").toUpperCase();
+  const emp = String(empresaAtualId || EMPRESA_PRINCIPAL_ID).toUpperCase();
 
   // já rodou pra essa empresa? então não faz nada
   if (__rotinaRodouPorEmpresa[emp]) return;
   __rotinaRodouPorEmpresa[emp] = true;
 
-  // ⚠️ roda UMA vez só (não em todo snapshot)
-  //try { migrarLocalStorageParaFirebaseSePreciso(); } catch(e) { console.log(e); }
- // try { garantirAdminPadrao().catch(console.error); } catch(e) { console.log(e); }
+  
 }
 
 
@@ -570,235 +1816,657 @@ let __pauseSaveUntil = 0;
 let __lastQuotaWarnAt = 0;
 
 
+async function compressImageToJpegBlob(file, {
+  maxW = 1280,
+  maxH = 1280,
+  quality = 0.6
+} = {}) {
+  const img = new Image();
+  img.src = URL.createObjectURL(file);
+  await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
 
-async function salvarNoFirebase(force = false) {
-  if (__firestoreBloqueado && !force) return false;
-  if (!firebasePronto || !docRef) return false;
+  let w = img.width, h = img.height;
+  const ratio = Math.min(maxW / w, maxH / h, 1);
+  w = Math.round(w * ratio);
+  h = Math.round(h * ratio);
 
-  // ✅ trava saves por 1 minuto quando quota estourar
-  if (!force && Date.now() < __pauseSaveUntil) {
-    return false;
-  }
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
 
-  // se snapshot tá carregando, só permite se for force
-  if (carregandoDoFirebase && !force) {
-    __savePendente = true;
-    return false;
-  }
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(img, 0, 0, w, h);
 
-  clearTimeout(__saveTimer);
+  const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", quality));
 
-  const delay = force ? 400 : 4000;
+  URL.revokeObjectURL(img.src);
+  return blob; // pronto pra upload
+}
 
 
-  return new Promise((resolve) => {
-    __saveTimer = setTimeout(async () => {
-      if (__saving) {
-        __queued = true;
-        resolve(true);
-        return;
-      }
+async function uploadFotoEGravarUrl({ db, empresaId, file }) {
+  await ensureAuth();
 
-      const core = { ocorrencias, maquinas, acertos, usuarios };
-      const coreStr = JSON.stringify(core);
+  // usa o storage global já criado
+  // const storage = getStorage(app);  ❌ remove isso
 
-      if (coreStr === __lastCoreStr) {
-        resolve(true);
-        return;
-      }
+  const blob = await compressImageToJpegBlob(file, { maxW: 1280, maxH: 1280, quality: 0.6 });
 
-      __saving = true;
+  empresaId = String(empresaId || "").trim().toUpperCase();
+  const path = `empresas/${empresaId}/fotos/app_${Date.now()}.jpg`;
+  const storageRef = ref(storage, path);
 
-      try {
-        salvarBackupLocal();
+  await uploadBytes(storageRef, blob, { contentType: "image/jpeg" });
+  const url = await getDownloadURL(storageRef);
 
-        await setDoc(
-          docRef,
-          { atualizadoEm: new Date().toISOString(), ...core },
-          { merge: true }
-        );
+  const docRef2 = doc(db, "empresas", empresaId, "dados", "app");
+  await setDoc(docRef2, { photoURL: url, photoPath: path, photoUpdatedAt: serverTimestamp() }, { merge: true });
 
-        __lastCoreStr = coreStr;
-        __backoffMs = 0;
-        __saving = false;
+  return url;
+}
 
-        if (__queued) {
-          __queued = false;
-          salvarNoFirebase(true);
-        }
 
-        resolve(true);
-      } catch (err) {
-        console.error("❌ Firebase save error:", err);
-
-        const isQuota =
-          String(err?.code || "").includes("resource-exhausted") ||
-          /quota/i.test(String(err?.message || ""));
-
-        __saving = false;
-
-        if (isQuota) {
-          // ✅ PAUSA saves por 60s
-          __pauseSaveUntil = Date.now() + 60000;
-
-          const now = Date.now();
-          if (now - __lastQuotaWarnAt > 20000) {
-            __lastQuotaWarnAt = now;
-            alert("⚠️ Firestore estourou a quota.\nVou pausar salvamentos por 1 minuto para evitar travamento.\n\n✅ Seus dados continuam salvos no backup local.");
-          }
-
-          // ✅ NUNCA repetir infinito
-          __queued = false;
-          resolve(false);
-          return;
-        }
-
-        alert("❌ Não consegui salvar no Firebase.\n\n" + (err?.message || err));
-        resolve(false);
-      }
-    }, delay);
-  });
+function resumoSeguroMaquina(m) {
+  return {
+    numero: String(m?.numero || "").trim().toUpperCase(),
+    estab: String(m?.estab || "").trim().toUpperCase(),
+    status: String(m?.status || "").trim().toUpperCase(),
+    rota: String(m?.rota || "").trim().toUpperCase(),
+    cliente: String(m?.cliente || ""),
+    endereco: String(m?.endereco || ""),
+    porcBase: Number(m?.porcBase || 0),
+    pixMaquinaId: String(m?.pixMaquinaId || ""),
+    ddd: String(m?.ddd || ""),
+    tel: String(m?.tel || ""),
+    foneFormatado: String(m?.foneFormatado || ""),
+    cpf: String(m?.cpf || ""),
+    rg: String(m?.rg || ""),
+    lat: m?.lat ?? null,
+    lng: m?.lng ?? null,
+    gpsAccuracy: m?.gpsAccuracy ?? null,
+    gpsUpdatedAt: m?.gpsUpdatedAt ?? null,
+    fotoUrl: String(m?.fotoUrl || ""),
+    fotoPath: String(m?.fotoPath || ""),
+    ultimoRelogio: Number(m?.ultimoRelogio || 0),
+    relogioAtualizadoEm: m?.relogioAtualizadoEm || null,
+    relogioOrigem: String(m?.relogioOrigem || ""),
+    historicoRelogios: Array.isArray(m?.historicoRelogios) ? m.historicoRelogios : [],
+    creditosRemotos: Array.isArray(m?.creditosRemotos) ? m.creditosRemotos : [],
+    dataCadastro: m?.dataCadastro || null,
+    resetStatusAt: m?.resetStatusAt || null
+  };
 }
 
 
 
+async function criarBackupCloudAntesDeSalvar(payload) {
+  const emp = String(empresaAtualId || EMPRESA_PRINCIPAL_ID).toUpperCase();
+  const backupId = new Date().toISOString().replace(/[:.]/g, "-");
+  const refBackup = doc(db, "empresas", emp, "backups", backupId);
 
- 
+  await setDoc(refBackup, {
+    criadoEm: new Date().toISOString(),
+    origem: "auto",
+    payload
+  });
+}
 
-async function iniciarSincronizacaoFirebase() {
-  if (__firestoreBloqueado) return;
+async function salvarEspelhoMaquinas(maquinasLista) {
+  const emp = String(empresaAtualId || EMPRESA_PRINCIPAL_ID).toUpperCase();
+  const batch = writeBatch(db);
 
-  // garante docRef
-  if (!docRef) {
-    const emp = localStorage.getItem("empresaAtualId") || "STRONDA";
-    setEmpresaAtual(emp);
+  (maquinasLista || []).forEach((m) => {
+    const numero = String(m?.numero || "").trim().toUpperCase();
+    if (!numero) return;
+
+    const refMaq = doc(db, "empresas", emp, "maquinas_individuais", numero);
+    batch.set(refMaq, {
+      ...resumoSeguroMaquina(m),
+      atualizadoEm: new Date().toISOString()
+    }, { merge: true });
+  });
+
+  await batch.commit();
+}
+
+async function lerResumoAtualDoBanco() {
+  await ensureAuth();
+  await garantirDocExiste();
+
+  const snap = await getDoc(docRef);
+  const data = snap.exists() ? (snap.data() || {}) : {};
+
+  return {
+    maquinas: Array.isArray(data.maquinas) ? data.maquinas : [],
+    usuarios: Array.isArray(data.usuarios) ? data.usuarios : [],
+    acertos: Array.isArray(data.acertos) ? data.acertos : [],
+    ocorrencias: Array.isArray(data.ocorrencias) ? data.ocorrencias : []
+  };
+}
+
+async function validarSalvamentoNaoDestrutivo(safeMaquinas, force = false) {
+  const atualBanco = await lerResumoAtualDoBanco();
+  const qtdBanco = atualBanco.maquinas.length;
+  const qtdNova = Array.isArray(safeMaquinas) ? safeMaquinas.length : 0;
+
+  // permite salvar normalmente se está aumentando ou mantendo
+  if (qtdNova >= qtdBanco) return true;
+
+  // queda pequena: aceita
+  if (qtdBanco - qtdNova <= 3) return true;
+
+  // queda forte: só deixa com confirmação manual
+  if (force) {
+    const ok = confirm(
+      `⚠️ ATENÇÃO\n\n` +
+      `O banco tem ${qtdBanco} máquinas e você está tentando salvar ${qtdNova}.\n\n` +
+      `Isso pode apagar dados.\n\n` +
+      `Deseja salvar mesmo assim?`
+    );
+    return ok;
   }
 
-  // se não está logado, só carrega uma vez pro login (sem snapshot)
-  if (!sessaoUsuario) {
-    await carregarDadosUmaVezParaLogin();
+  alert(
+    `⛔ Salvamento bloqueado.\n\n` +
+    `O banco tem ${qtdBanco} máquinas e o estado atual tem ${qtdNova}.\n` +
+    `Para evitar apagar dados, o sistema cancelou o salvamento.`
+  );
+  return false;
+}
+
+
+
+// ✅ FILA GLOBAL DE SALVAMENTO (não precisa mudar o resto do código)
+let __saveQueue = Promise.resolve();
+
+async function salvarNoFirebase(force = false) {
+  try {
+    await ensureAuth();
+    await garantirDocExiste();
+
+    if (!docRef) {
+      console.error("❌ docRef não existe (setEmpresaAtual/garantirDocExiste).");
+      alert("❌ Banco não pronto (docRef).");
+      return false;
+    }
+
+    if (!empresaPerfil || typeof empresaPerfil !== "object") empresaPerfil = {};
+
+    const safeMaquinas = Array.isArray(maquinas)
+      ? maquinas.map((m) => {
+          const mm = normalizarGPSMaquina(m);
+
+          if (mm && typeof mm === "object") {
+            delete mm.foto;
+            delete mm.fotoBase64;
+          }
+
+          return mm;
+        })
+      : [];
+
+    const safeUsuarios    = Array.isArray(usuarios) ? usuarios : [];
+    const safeAcertos     = Array.isArray(acertos) ? acertos : [];
+    const safeOcorrencias = Array.isArray(ocorrencias) ? ocorrencias : [];
+
+    const podeSalvar = await validarSalvamentoNaoDestrutivo(safeMaquinas, force);
+    if (!podeSalvar) return false;
+
+    const payload = {
+      atualizadoEm: new Date().toISOString(),
+      maquinas: safeMaquinas,
+      usuarios: safeUsuarios,
+      acertos: safeAcertos,
+      ocorrencias: safeOcorrencias,
+      rotas: Array.isArray(rotas) ? rotas : [],
+      empresaPerfil
+    };
+
+    try { salvarBackupLocal(); } catch {}
+
+    // 1) backup cloud antes do save principal
+    await criarBackupCloudAntesDeSalvar(payload);
+
+    // 2) save principal
+    await setDoc(docRef, payload, { merge: true });
+
+    // 3) espelho por máquina
+    await salvarEspelhoMaquinas(safeMaquinas);
+
+    console.log("✅ SALVO no Firestore (docRef + backup + espelho)");
+    return true;
+
+  } catch (e) {
+    console.error("❌ ERRO AO SALVAR (Firestore):", e);
+
+    if (typeof isQuotaErr === "function" && isQuotaErr(e)) {
+      try { entrarModoOfflinePorQuota(e); } catch {}
+      return false;
+    }
+
+    alert("❌ Não salvou no Firebase. Veja o Console (F12).");
+    return false;
+  }
+}
+
+
+window.masterBloquearEmpresa = async function (empresaId, motivo = "") {
+  if (!exigirMaster()) return false;
+
+  const emp = String(empresaId || "").trim().toUpperCase();
+  if (!emp) {
+    alert("❌ Empresa inválida.");
+    return false;
+  }
+
+  await ensureAuth();
+
+  const ref = doc(db, "empresas", emp, "dados", "app");
+  const snap = await getDoc(ref);
+  const data = snap.exists() ? (snap.data() || {}) : {};
+
+  const perfil = (data.empresaPerfil && typeof data.empresaPerfil === "object") ? data.empresaPerfil : {};
+
+  perfil.manualBlocked = true;
+  perfil.manualBlockedAt = new Date().toISOString();
+  perfil.manualBlockedReason = String(motivo || "").trim() || "bloqueio manual";
+
+  await setDoc(ref, { empresaPerfil: perfil }, { merge: true });
+
+  alert("✅ Empresa BLOQUEADA: " + emp);
+  return true;
+};
+
+window.masterDesbloquearEmpresa = async function (empresaId) {
+  if (!exigirMaster()) return false;
+
+  const emp = String(empresaId || "").trim().toUpperCase();
+  if (!emp) {
+    alert("❌ Empresa inválida.");
+    return false;
+  }
+
+  await ensureAuth();
+
+  const ref = doc(db, "empresas", emp, "dados", "app");
+  const snap = await getDoc(ref);
+  const data = snap.exists() ? (snap.data() || {}) : {};
+
+  const perfil = (data.empresaPerfil && typeof data.empresaPerfil === "object") ? data.empresaPerfil : {};
+
+  perfil.manualBlocked = false;
+  perfil.manualBlockedAt = null;
+  perfil.manualBlockedReason = null;
+
+  await setDoc(ref, { empresaPerfil: perfil }, { merge: true });
+
+  alert("✅ Empresa DESBLOQUEADA: " + emp);
+  return true;
+};
+
+async function carregarDadosUmaVezParaLogin() {
+  console.log("🔎 carregarDadosUmaVezParaLogin() começou");
+
+  try {
+    await ensureAuth();
+  } catch (e) {}
+
+  await garantirDocExiste();
+
+  if (!docRef) {
+    console.error("❌ docRef não existe em carregarDadosUmaVezParaLogin()");
     return;
   }
 
-  // evita reentrância
-  if (__syncAtivo || __syncIniciando) return;
+  const snap = await getDoc(docRef);
+  const data = snap.exists() ? (snap.data() || {}) : {};
 
+  // ✅ SEMPRE sobrescreve (nunca mantém antigo)
+  aplicarDadosDoFirestore(data);
+
+  firebasePronto = true;
+
+  console.log("✅ carregarDadosUmaVezParaLogin() terminou OK");
+
+  // atualiza telas
+  try { listarMaquinas(); } catch {}
+  try { atualizarStatus(); } catch {}
+  try { listarOcorrencias(); } catch {}
+  try { atualizarAlertaOcorrencias(); } catch {}
+}
+
+window.debugLerFirebaseAtual = async function () {
+  try {
+    await ensureAuth();
+
+    if (!docRef) {
+      console.error("❌ docRef vazio");
+      return null;
+    }
+
+    const snap = await getDoc(docRef);
+    const data = snap.exists() ? (snap.data() || {}) : null;
+
+    console.log("DOCREF:", docRef.path);
+    console.log("MAQUINAS FIREBASE:", data?.maquinas?.length || 0);
+    console.log("USUARIOS FIREBASE:", data?.usuarios?.length || 0);
+    console.log("ACERTOS FIREBASE:", data?.acertos?.length || 0);
+    console.log("OCORRENCIAS FIREBASE:", data?.ocorrencias?.length || 0);
+    console.log(
+      "MAQUINAS:",
+      (data?.maquinas || []).map(m => ({
+        numero: m.numero,
+        estab: m.estab,
+        status: m.status
+      }))
+    );
+
+    return data;
+  } catch (e) {
+    console.error("❌ debugLerFirebaseAtual falhou:", e);
+    return null;
+  }
+};
+
+
+window.recuperarRelogiosDosAcertos = async function () {
+  try {
+    if (!Array.isArray(maquinas) || !Array.isArray(acertos)) {
+      alert("❌ Máquinas ou acertos não carregados ainda.");
+      return false;
+    }
+
+    let alteradas = 0;
+    let semAcerto = 0;
+
+    for (const m of maquinas) {
+      const num = String(m?.numero || "").trim().toUpperCase();
+      if (!num) continue;
+
+      const lista = acertos
+        .filter(a => String(a?.numero || "").trim().toUpperCase() === num)
+        .filter(a => Number(a?.relogioAtual) > 0);
+
+      if (!lista.length) {
+        semAcerto++;
+        continue;
+      }
+
+      lista.sort((a, b) => {
+        const da = new Date(a?.data || 0).getTime();
+        const db = new Date(b?.data || 0).getTime();
+        return db - da;
+      });
+
+      const ultimoAcerto = lista[0];
+      const relogioRecuperado = Number(ultimoAcerto.relogioAtual || 0);
+
+      if (!Number.isFinite(relogioRecuperado) || relogioRecuperado <= 0) continue;
+
+      const atual = Number(m?.ultimoRelogio || 0);
+
+      if (atual !== relogioRecuperado) {
+        m.ultimoRelogio = relogioRecuperado;
+        m.relogioAtualizadoEm = new Date().toISOString();
+        m.relogioOrigem = "RECUPERADO_DOS_ACERTOS";
+        alteradas++;
+      }
+    }
+
+    window.maquinas = maquinas;
+
+    const ok = await salvarNoFirebase(true);
+    if (!ok) {
+      alert("❌ Não consegui salvar os relógios recuperados no Firebase.");
+      return false;
+    }
+
+    try { listarMaquinas(); } catch {}
+    try { atualizarStatus(); } catch {}
+
+    alert(
+      `✅ Recuperação concluída!\n\n` +
+      `Máquinas atualizadas: ${alteradas}\n` +
+      `Máquinas sem acerto: ${semAcerto}`
+    );
+
+    return true;
+  } catch (e) {
+    console.error("❌ recuperarRelogiosDosAcertos falhou:", e);
+    alert("❌ Erro ao recuperar relógios dos acertos.");
+    return false;
+  }
+};
+
+
+window.salvarRecuperacaoAgora = async function () {
+  const ok = await salvarNoFirebase(true);
+  if (ok) alert("✅ Recuperação salva no Firebase.");
+  return ok;
+};
+
+
+async function iniciarSincronizacaoFirebase() {
+  if (__firestoreBloqueado) return;
+  if (__syncIniciando) return;
   __syncIniciando = true;
 
   try {
     await ensureAuth();
     await garantirDocExiste();
 
-    // ✅ sempre para o snapshot ANTES de ligar outro
+    if (!docRef) {
+      console.error("❌ docRef não existe (iniciarSincronizacaoFirebase).");
+      __syncIniciando = false;
+      return;
+    }
+
+    // evita duplicar snapshot
     pararSnapshotAtual();
 
-    carregandoDoFirebase = true;
-
-    // ✅ agora sim liga e guarda o unsub
     unsubSnapshot = onSnapshot(
       docRef,
       (snap) => {
-        carregandoDoFirebase = false;
-
         const data = snap.exists() ? (snap.data() || {}) : {};
 
-        if (Array.isArray(data.ocorrencias)) ocorrencias = data.ocorrencias;
-        if (Array.isArray(data.maquinas))    maquinas    = data.maquinas.map(normalizarGPSMaquina);
-        if (Array.isArray(data.acertos))     acertos     = data.acertos;
-        if (Array.isArray(data.usuarios))    usuarios    = data.usuarios;
-
-        salvarBackupLocal();
+        // ✅ SEMPRE sobrescreve com dados da empresa atual
+        aplicarDadosDoFirestore(data);
 
         firebasePronto = true;
-        habilitarBotaoLogin();
 
+        // ✅ atualiza UI
         try { listarMaquinas(); } catch {}
         try { atualizarStatus(); } catch {}
         try { listarOcorrencias(); } catch {}
         try { atualizarAlertaOcorrencias(); } catch {}
-
-        rodarRotinasApenasUmaVezPorEmpresa();
       },
       (err) => {
-        carregandoDoFirebase = false;
+        console.error("❌ onSnapshot erro:", err);
 
-        console.error("❌ Firebase snapshot error:", err);
-
-        if (isQuotaErr(err)) {
+        if (typeof isQuotaErr === "function" && isQuotaErr(err)) {
           entrarModoOfflinePorQuota(err);
-          return;
         }
-
-        firebasePronto = true;
-        habilitarBotaoLogin();
-
-        const ok = carregarBackupLocal();
-        if (ok) {
-          try { listarMaquinas(); } catch {}
-          try { atualizarStatus(); } catch {}
-          try { listarOcorrencias(); } catch {}
-        }
-
-        alert(
-          "❌ Firebase não conectou.\n\n" +
-          (err?.message || err) +
-          (ok ? "\n\n✅ Mostrei seus dados do backup local." : "\n\n⚠️ Não achei backup local dessa empresa.")
-        );
       }
     );
 
-    // ✅ marcou ativo APÓS ter unsub
     __syncAtivo = true;
-
   } catch (e) {
-    carregandoDoFirebase = false;
-    firebasePronto = false;
-    desabilitarBotaoLogin();
-    console.error("❌ Falha iniciar Firebase:", e);
-
-    if (isQuotaErr(e)) {
-      entrarModoOfflinePorQuota(e);
-      return;
-    }
-
-    alert("❌ Falha ao iniciar Firebase.\n\n" + (e?.message || e));
+    console.error("❌ erro iniciarSincronizacaoFirebase:", e);
   } finally {
     __syncIniciando = false;
   }
 }
 
+// -------- File -> Base64 comprimido --------
+function reduzirImagemParaBase64(file, opt) {
+  const { maxW = 900, maxH = 900, qualidade = 0.75, tipo = "image/jpeg" } = (opt || {});
+
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onerror = () => reject(new Error("Falha ao ler arquivo"));
+
+    fr.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Falha ao abrir imagem"));
+
+      img.onload = () => {
+        let w = img.width;
+        let h = img.height;
+
+        // ✅ mantém proporção
+        const ratio = Math.min(maxW / w, maxH / h, 1);
+        w = Math.round(w * ratio);
+        h = Math.round(h * ratio);
+
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+
+        const ctx = canvas.getContext("2d", { alpha: false });
+        if (!ctx) return reject(new Error("Canvas não suportado"));
+
+        ctx.drawImage(img, 0, 0, w, h);
+
+        const base64 = canvas.toDataURL(tipo, qualidade);
+        resolve(base64);
+      };
+
+      img.src = String(fr.result || "");
+    };
+
+    fr.readAsDataURL(file);
+  });
+}
+
+
+function abrirFotoMaquina(numero) {
+  const num = String(numero || maquinaSelecionadaNumero || "").trim().toUpperCase();
+  const m = (maquinas || []).find(x => String(x.numero || "").toUpperCase() === num);
+
+  const src = (m && (m.fotoUrl || m.foto)) || "";
+  if (!src) return alert("❌ Essa máquina não tem foto.");
+
+  const overlay = document.createElement("div");
+  overlay.style.position = "fixed";
+  overlay.style.inset = "0";
+  overlay.style.background = "rgba(0,0,0,.85)";
+  overlay.style.zIndex = "99999";
+  overlay.style.display = "flex";
+  overlay.style.alignItems = "center";
+  overlay.style.justifyContent = "center";
+  overlay.style.padding = "16px";
+
+  overlay.innerHTML = `
+    <div style="width:100%; max-width:920px; text-align:center;">
+      <img src="${src}"
+        style="max-width:100%; max-height:82vh; border-radius:16px; object-fit:contain; background:#111;">
+      <div style="margin-top:12px; display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
+        <button id="btnFecharFoto"
+          style="padding:12px 14px; border:none; border-radius:12px; font-weight:800; cursor:pointer;">
+          Fechar
+        </button>
+      </div>
+      <div style="margin-top:10px; color:#fff; font-weight:800;">
+        ${String(m.estab || "").toUpperCase()} (JB Nº ${String(m.numero || "").toUpperCase()})
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+
+  overlay.querySelector("#btnFecharFoto").onclick = () => overlay.remove();
+}
+
+window.abrirFotoMaquina = abrirFotoMaquina;
+
+function abrirCreditosRemotos() {
+  if (!exigirAdmin()) return; // ✅ COLAB não entra
+  abrir("creditosRemotos");   // ✅ abre a tela
+}
+window.abrirCreditosRemotos = abrirCreditosRemotos;
 
 
 
   function salvarSessao(u) {
-  sessaoUsuario = { tipo: u.tipo, nome: u.nome, user: u.user, empresaId: u.empresaId || null };
-  localStorage.setItem("sessaoUsuario", JSON.stringify(sessaoUsuario));
+  const tipo = String(u.tipo || "").toUpperCase();
 
-  window.__sessao = sessaoUsuario; // ✅ pra enxergar no console
+  sessaoUsuario = {
+    tipo,
+    nome: u.nome,
+    user: u.user,
+    empresaId: (tipo === "MASTER" ? EMPRESA_PRINCIPAL_ID : (u.empresaId || null)),
+    criadoEm: Date.now()
+  };
+
+  // ✅ deixa global (para o menu / body class / permissões enxergarem)
+  window.sessaoUsuario = sessaoUsuario;
+  window.__sessao = sessaoUsuario;
 }
 
-function carregarSessao() {
+window.trocarCredenciaisMaster = async function () {
   try {
-    const s = JSON.parse(localStorage.getItem("sessaoUsuario") || "null");
-    sessaoUsuario = s;
-  } catch {
-    sessaoUsuario = null;
+    if (!exigirMaster()) return;
+
+    // MASTER é sempre na empresa principal
+    const empId = EMPRESA_PRINCIPAL;
+
+    const novoUser = prompt("Digite o NOVO usuário do MASTER (login):", "strondamusic");
+    if (novoUser === null) return;
+
+    const userLimpo = String(novoUser || "").trim().toLowerCase();
+    if (!userLimpo) return alert("❌ Usuário não pode ficar vazio.");
+
+    const novaSenha = prompt("Digite a NOVA senha do MASTER (mín. 4):");
+    if (novaSenha === null) return;
+
+    const senhaLimpa = String(novaSenha || "").trim();
+    if (senhaLimpa.length < 4) return alert("❌ Senha muito curta.");
+
+    const confirma = prompt("Confirme a NOVA senha do MASTER:");
+    if (confirma === null) return;
+
+    if (String(confirma).trim() !== senhaLimpa) {
+      return alert("❌ Confirmação não bate.");
+    }
+
+    // garante que está na empresa EMPRESA_PRINCIPAL_ID carregada
+    pararSnapshotAtual();
+    setEmpresaAtual(empId);
+    await carregarDadosUmaVezParaLogin();
+
+    // acha o usuário MASTER no doc
+    const idx = (usuarios || []).findIndex(u => String(u.tipo || "").toUpperCase() === "MASTER");
+    if (idx === -1) return alert("❌ MASTER não encontrado no banco.");
+
+    // atualiza os dados
+    usuarios[idx].user = userLimpo;
+    usuarios[idx].senha = senhaLimpa;
+
+    // salva no doc da empresa
+    await salvarNoFirebase(true);
+
+    // salva no índice central
+    await salvarLoginIndex({
+      user: userLimpo,
+      tipo: "MASTER",
+      empresaId: EMPRESA_PRINCIPAL,
+      senha: senhaLimpa
+    });
+
+    alert("✅ Credenciais do MASTER atualizadas com sucesso!\n\n⚠️ Faça login novamente com o novo usuário/senha.");
+
+    // desloga
+    sair();
+
+  } catch (e) {
+    console.error(e);
+    alert("❌ Falha ao trocar credenciais do MASTER.\n\n" + (e?.message || e));
   }
-}
-
-
-
-
-
-function isAdmin() {
-  const t = String(sessaoUsuario?.tipo || "").toUpperCase();
-  return t === "ADMIN" || t === "MASTER";
-}
-
-function isMaster() {
-  const t = String(sessaoUsuario?.tipo || "").toUpperCase();
-  return t === "MASTER";
-}
+};
 
 
 function isLogado() {
@@ -807,7 +2475,6 @@ function isLogado() {
 }
 
 
-// bloqueio simples: se não for admin, não entra
 function exigirAdmin() {
   if (!isLogado()) {
     alert("❌ Faça login primeiro.");
@@ -815,12 +2482,31 @@ function exigirAdmin() {
     limparCamposLogin();
     return false;
   }
-  if (!isAdmin()) {
-    alert("❌ Apenas ADMIN pode acessar isso.");
+  if (typeof isAdmin === "function" && !isAdmin()) {
+    alert("❌ Somente ADMIN/MASTER.");
     return false;
   }
   return true;
 }
+
+
+function aplicarPermissoesMenu() {
+  // ✅ ainda não logou? não mexe no menu
+  if (!window.sessaoUsuario) return;
+
+  const btn = document.getElementById("btnCadastrarMaquina");
+  if (!btn) return;
+
+  // ✅ colaborador: esconde
+  if (window.isColab && window.isColab()) {
+    btn.style.display = "none";
+    return;
+  }
+
+  // ✅ admin/master: mostra
+  btn.style.display = "";
+}
+
 
 function exigirMaster() {
   if (!isLogado()) {
@@ -835,6 +2521,7 @@ function exigirMaster() {
   }
   return true;
 }
+
 
 
 // =====================
@@ -853,8 +2540,13 @@ function mostrarTelaLogin() {
     app.style.display = "none";
   }
 
+  // ✅ MUITO IMPORTANTE: quando volta pro login, destrava o botão entrar
+  try { habilitarBotaoLogin(); } catch {}
+
   window.scrollTo(0, 0);
 }
+
+
 
 function mostrarApp() {
   const telaLogin = document.getElementById("telaLogin");
@@ -880,8 +2572,6 @@ function mostrarApp() {
 }
 
 window.mostrarTelaLogin = mostrarTelaLogin;
-window.mostrarApp = mostrarApp;
-
 
 // =====================
 // 🔒 PERMISSÕES (ADMIN x COLAB)
@@ -906,139 +2596,599 @@ function aplicarPermissoesUI() {
   }
 }
 
-function newId() {
-  return (crypto?.randomUUID?.() || (Date.now() + "_" + Math.random().toString(16).slice(2)));
+function esconderBotaoCadastrarMaquina() {
+  if (typeof isAdmin !== "function" || !isAdmin()) return;
+
+
+  // botão do menu (principal)
+  const btnMenu = document.getElementById("btnCadastrarMaquina");
+  if (btnMenu) btnMenu.style.display = "none";
+
+  // se existir algum botão de cadastrar máquina DENTRO da tela de colaboradores
+  const btnDentro = document.querySelector("#colaboradores #btnCadastrarMaquina, #colaboradores .btnCadastrarMaquina");
+  if (btnDentro) btnDentro.style.display = "none";
 }
 
-async function migrarLocalStorageParaFirebaseSePreciso() {
+// ============================
+// ✅ FOTO: cache local + Storage + Firestore (via salvarNoFirebase)
+// ============================
+const FOTO_QUALITY = 0.55;
+const FOTO_MAX_W = 720;
+const FOTO_MAX_H = 720;
+const LS_FOTOS_KEY = "fotos_maquinas_cache_v1";
+
+// -------- LocalStorage (navegador) --------
+function lerCacheFotos() {
+  try { return JSON.parse(localStorage.getItem(LS_FOTOS_KEY) || "{}"); }
+  catch { return {}; }
+}
+function salvarCacheFotos(obj) {
+  localStorage.setItem(LS_FOTOS_KEY, JSON.stringify(obj || {}));
+}
+function salvarFotoNoNavegador(numero, base64, extra = {}) {
+  const cache = lerCacheFotos();
+  const key = String(numero || "").toUpperCase().trim();
+  cache[key] = { base64, updatedAt: Date.now(), ...extra };
+  salvarCacheFotos(cache);
+}
+function removerFotoDoNavegador(numero) {
+  const cache = lerCacheFotos();
+  delete cache[String(numero || "").toUpperCase().trim()];
+  salvarCacheFotos(cache);
+}
+
+
+function aplicarFotosDoNavegadorNasMaquinas() {
+  const cache = lerCacheFotos();
+
+  (maquinas || []).forEach((m) => {
+    const key = String(m.numero || "").toUpperCase().trim();
+    const c = cache[key];
+    if (!c) return;
+
+    // ✅ prioridade SEMPRE do Firebase (fotoUrl)
+    // só usa o base64 do cache como fallback (quando não existe fotoUrl)
+    if (!m.fotoUrl && c.base64) {
+      m.foto = c.base64;
+    }
+
+    // ✅ não sobrescreve fotoUrl vindo do Firebase
+    if (!m.fotoUrl && c.fotoUrl) m.fotoUrl = c.fotoUrl;
+
+    // mantém fotoPath só se não existir
+    if (!m.fotoPath && c.fotoPath) m.fotoPath = c.fotoPath;
+  });
+}
+
+
+
+
+function base64ToBlob(dataUrl) {
+  const [meta, b64] = String(dataUrl).split(",");
+  const mime = (meta.match(/data:(.*?);base64/) || [])[1] || "image/jpeg";
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+
+async function uploadFotoParaStorage({ empresaId, numeroMaquina, blob }) {
+  const emp = String(empresaId || EMPRESA_PRINCIPAL_ID || "EMP").toUpperCase();
+  const num = String(numeroMaquina || "").toUpperCase().trim();
+
+  const path = `empresas/${emp}/maquinas/${num}/foto_${Date.now()}.jpg`;
+  const storageRef = ref(storage, path);
+
+  await uploadBytes(storageRef, blob, {
+    contentType: blob.type || "image/jpeg",
+    cacheControl: "public,max-age=31536000",
+  });
+
+  const url = await getDownloadURL(storageRef);
+  return { url, path };
+}
+
+
+// -------- FUNÇÃO PRINCIPAL --------
+function escolherFotoMaquina(numero) {
+  const num = String(numero || maquinaSelecionadaNumero || "").trim().toUpperCase();
+  if (!num) return alert("❌ Máquina não encontrada.");
+
+  const m = (maquinas || []).find(x => String(x.numero || "").toUpperCase() === num);
+  if (!m) return alert("❌ Máquina não encontrada.");
+
+  // 🔥 cria menu tipo WhatsApp
+  const menu = document.createElement("div");
+  menu.style.position = "fixed";
+  menu.style.bottom = "0";
+  menu.style.left = "0";
+  menu.style.right = "0";
+  menu.style.background = "#111";
+  menu.style.padding = "16px";
+  menu.style.borderTopLeftRadius = "16px";
+  menu.style.borderTopRightRadius = "16px";
+  menu.style.zIndex = "99999";
+
+  menu.innerHTML = `
+    <button id="btnCamera" style="width:100%;padding:14px;margin-bottom:10px;border-radius:10px;font-weight:800;">
+      📷 Tirar Foto
+    </button>
+
+    <button id="btnGaleria" style="width:100%;padding:14px;margin-bottom:10px;border-radius:10px;font-weight:800;">
+      🖼️ Escolher da Galeria
+    </button>
+
+    <button id="btnCancelar" style="width:100%;padding:14px;border-radius:10px;">
+      Cancelar
+    </button>
+  `;
+
+  document.body.appendChild(menu);
+
+  function abrirInput(modo) {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+
+    if (modo === "camera") {
+      input.setAttribute("capture", "environment");
+    }
+
+    input.onchange = () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = () => abrirTelaRecorte(reader.result, m, num);
+      reader.readAsDataURL(file);
+    };
+
+    input.click();
+    menu.remove();
+  }
+
+  menu.querySelector("#btnCamera").onclick = () => abrirInput("camera");
+  menu.querySelector("#btnGaleria").onclick = () => abrirInput("galeria");
+  menu.querySelector("#btnCancelar").onclick = () => menu.remove();
+}
+
+
+
+function abrirTelaRecorte(src, maquina, num) {
+  const overlay = document.createElement("div");
+  overlay.style.position = "fixed";
+  overlay.style.inset = "0";
+  overlay.style.background = "rgba(0,0,0,.95)";
+  overlay.style.zIndex = "99999";
+  overlay.style.display = "flex";
+  overlay.style.flexDirection = "column";
+
+  overlay.innerHTML = `
+    <div style="flex:1; min-height:0; display:flex; align-items:center; justify-content:center; background:#111;">
+      <img id="imgCrop" src="${src}" style="max-width:100%; max-height:100%; display:block;">
+    </div>
+
+    <div style="padding:12px; background:#000; display:flex; flex-direction:column; gap:10px;">
+      <div style="display:flex; gap:10px;">
+        <button id="btnCortar" style="flex:1;padding:14px;border-radius:10px;font-weight:800;cursor:pointer;">
+          Salvar Foto
+        </button>
+        <button id="btnCancelarCrop" style="flex:1;padding:14px;border-radius:10px;cursor:pointer;">
+          Cancelar
+        </button>
+      </div>
+
+      <div style="color:#fff; opacity:.8; font-weight:700; text-align:center;">
+        Arraste a imagem e ajuste as bordas do recorte
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  const image = overlay.querySelector("#imgCrop");
+  const btnSalvar = overlay.querySelector("#btnCortar");
+  const btnCancelar = overlay.querySelector("#btnCancelarCrop");
+
+  let cropper = null;
+
+  function fechar() {
+    try { cropper?.destroy?.(); } catch {}
+    cropper = null;
+    overlay.remove();
+  }
+
+  btnCancelar.onclick = fechar;
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) fechar();
+  });
+
+  if (!window.Cropper) {
+    alert("❌ Cropper não carregou.");
+    return fechar();
+  }
+
+  btnSalvar.disabled = true;
+  btnSalvar.style.opacity = "0.6";
+
+  image.onload = () => {
+    try {
+      cropper = new window.Cropper(image, {
+        viewMode: 1,
+        autoCropArea: 1,
+        responsive: true,
+        background: false,
+        modal: true,
+        guides: true,
+
+        // 👇 ESSAS 3 LINHAS SÃO O SEGREDO DO COMPORTAMENTO QUE VOCÊ QUER
+        dragMode: "move",
+        cropBoxMovable: true,
+        cropBoxResizable: true,
+
+        // livre (não prende quadrado)
+        aspectRatio: NaN,
+
+        minCropBoxWidth: 80,
+        minCropBoxHeight: 80,
+      });
+
+      setTimeout(() => {
+        try { cropper.resize(); } catch {}
+      }, 50);
+
+      btnSalvar.disabled = false;
+      btnSalvar.style.opacity = "1";
+    } catch (e) {
+      console.error(e);
+      alert("❌ Falha ao iniciar o recorte.");
+      fechar();
+    }
+  };
+
+  btnSalvar.onclick = async () => {
+    if (!cropper) return;
+
+    btnSalvar.disabled = true;
+    btnSalvar.style.opacity = "0.7";
+
+    try {
+      const canvas = cropper.getCroppedCanvas({
+        width: 800,
+        height: 800
+      });
+
+      const base64 = canvas.toDataURL("image/jpeg", 0.7);
+
+      maquina.foto = base64;
+      salvarFotoNoNavegador(num, base64);
+
+      try {
+        const blob = base64ToBlob(base64);
+        const up = await uploadFotoParaStorage({
+          empresaId: empresaAtualId,
+          numeroMaquina: num,
+          blob
+        });
+
+        maquina.fotoUrl = up.url;
+maquina.fotoPath = up.path;
+maquina.fotoUpdatedAt = new Date().toISOString();
+
+// ✅ atualiza cache local também com a url/path
+salvarFotoNoNavegador(num, base64, { fotoUrl: up.url, fotoPath: up.path });
+
+await salvarNoFirebase(true);
+
+        alert("✅ Foto salva!");
+      } catch (e) {
+        console.error(e);
+        alert("✅ Foto salva só no aparelho.");
+      }
+
+      try { listarMaquinas(); } catch {}
+      fechar();
+
+    } catch (e) {
+      console.error(e);
+      alert("❌ Falha ao recortar.");
+      btnSalvar.disabled = false;
+      btnSalvar.style.opacity = "1";
+    }
+  };
+}
+
+
+function removerFotoMaquina(numero) {
+  const num = String(numero || maquinaSelecionadaNumero || "").trim().toUpperCase();
+  const m = (maquinas || []).find(x => String(x.numero || "").toUpperCase() === num);
+  if (!m) return alert("❌ Máquina não encontrada.");
+
+  const ok = confirm("Remover a foto dessa máquina?");
+  if (!ok) return;
+
+  // remove do preview
+  m.foto = null;
+  m.fotoUrl = null;
+  m.fotoPath = null;
+  m.fotoUpdatedAt = new Date().toISOString();
+
+  // remove do navegador
+  removerFotoDoNavegador(num);
+
+  // tenta persistir
+  try { salvarNoFirebase(true); } catch {}
+
+  try { listarMaquinas(); } catch {}
+  try { atualizarStatus(); } catch {}
+  alert("✅ Foto removida.");
+}
+
+window.escolherFotoMaquina = escolherFotoMaquina;
+window.removerFotoMaquina = removerFotoMaquina;
+window.aplicarFotosDoNavegadorNasMaquinas = aplicarFotosDoNavegadorNasMaquinas;
+
+
+
+async function voltarParaStronda() {
   try {
-    const emp = String(empresaAtualId || "STRONDA").toUpperCase();
-    const chave = "MIGROU_LOCAL_PARA_FIREBASE_" + emp;
+    pararSnapshotAtual();
 
-    if (localStorage.getItem(chave) === "1") return;
-    if (!firebasePronto || !docRef) return;
+    setEmpresaAtual(EMPRESA_PRINCIPAL); // EMPRESA_PRINCIPAL_ID
+    localStorage.setItem("empresaAtualId", EMPRESA_PRINCIPAL);
 
-    // confirma estado REAL do Firebase agora (evita “corrida”)
-    const snap = await getDoc(docRef);
-    const dataFb = snap.exists() ? (snap.data() || {}) : {};
+    firebasePronto = false;
+    desabilitarBotaoLogin();
 
-    const fbTemAlgo =
-      (Array.isArray(dataFb.maquinas) && dataFb.maquinas.length) ||
-      (Array.isArray(dataFb.acertos) && dataFb.acertos.length) ||
-      (Array.isArray(dataFb.ocorrencias) && dataFb.ocorrencias.length) ||
-      (Array.isArray(dataFb.usuarios) && dataFb.usuarios.length);
+    // carrega dados já (não espera snapshot)
+    await carregarDadosUmaVezParaLogin();
 
-    if (fbTemAlgo) {
-      localStorage.setItem(chave, "1");
-      return;
-    }
+    // liga snapshot da EMPRESA_PRINCIPAL_ID
+    pararSnapshotAtual();
+    __syncAtivo = false;
+    await iniciarSincronizacaoFirebase();
 
-    const m = JSON.parse(localStorage.getItem("maquinas") || "[]");
-    const a = JSON.parse(localStorage.getItem("acertos") || "[]");
-    const o = JSON.parse(localStorage.getItem("ocorrencias") || "[]");
-    const u = JSON.parse(localStorage.getItem("usuarios") || "[]");
+    // atualiza UI
+    mostrarApp();
+    aplicarPermissoesUI();
+    aplicarPermissoesMenu();
+    try { listarMaquinas(); } catch {}
+    try { atualizarStatus(); } catch {}
+    try { listarOcorrencias(); } catch {}
 
-    const temLocal = (m.length || a.length || o.length || u.length);
-    if (!temLocal) {
-      localStorage.setItem(chave, "1");
-      return;
-    }
-
-    maquinas = Array.isArray(m) ? m.map(normalizarGPSMaquina) : [];
-    acertos = Array.isArray(a) ? a : [];
-    ocorrencias = Array.isArray(o) ? o : [];
-    usuarios = Array.isArray(u) ? u : [];
-
-    const ok = await salvarNoFirebase(true);
-    if (ok) {
-      localStorage.setItem(chave, "1");
-      alert("✅ Migrei seus dados do localStorage para o Firebase!");
-    } else {
-      console.warn("⚠️ Migração falhou (save).");
-    }
+    alert(`✅ Voltou para ${EMPRESA_PRINCIPAL_NOME}!`);
   } catch (e) {
-    console.log("Falha migrar:", e);
+    console.error(e);
+    alert(`❌ Falha ao voltar para ${EMPRESA_PRINCIPAL_NOME}.\n\n` + (e?.message || e));
+  }
+}
+window.voltarParaStronda = voltarParaStronda;
+
+
+async function entrarLogin(tipo) {
+  desabilitarBotaoLogin();
+
+  try {
+    try { await ensureAuth(); } catch (e) {}
+
+    tipo = String(tipo || "").toUpperCase();
+    if (tipo.includes("ADMIN")) tipo = "ADMIN";
+    if (tipo.includes("COLAB")) tipo = "COLAB";
+
+    const user = (document.getElementById("loginUser")?.value || "").trim().toLowerCase();
+    const senha = (document.getElementById("loginSenha")?.value || "").trim();
+
+    if (!user || !senha) {
+      alert("❌ Preencha usuário e senha.");
+      return;
+    }
+
+    // 1) busca login no índice central
+    let info = null;
+    try {
+      info = await buscarLoginIndex(user);
+    } catch (e) {
+      console.error("buscarLoginIndex erro:", e);
+    }
+
+    if (!info) {
+      alert("❌ Usuário não encontrado.");
+      return;
+    }
+
+    const tipoReal = String(info.tipo || "").toUpperCase();
+    const empresaDoUser = String(info.empresaId || "").toUpperCase();
+    const senhaReal = String(info.senha || "");
+
+    // 2) valida senha
+    if (senhaReal !== senha) {
+      alert("❌ Login inválido.");
+      return;
+    }
+
+    // 3) valida tipo pedido na tela
+    if (tipo === "ADMIN" && !(tipoReal === "ADMIN" || tipoReal === "MASTER")) {
+      alert("❌ Esse usuário não é ADMIN.");
+      return;
+    }
+    if (tipo === "COLAB" && tipoReal !== "COLAB") {
+      alert("❌ Esse usuário não é COLAB.");
+      return;
+    }
+
+    pararSnapshotAtual();
+
+    // 4) define empresa atual
+    if (tipoReal === "MASTER") {
+      setEmpresaAtual(EMPRESA_PRINCIPAL);
+    } else {
+      setEmpresaAtual(empresaDoUser);
+    }
+
+    firebasePronto = false;
+
+    // ✅ 5) BLOQUEIA LOGIN se a empresa foi apagada (MASTER ignora)
+    if (tipoReal !== "MASTER") {
+      let existe = false;
+      try {
+        existe = await empresaExiste(empresaDoUser); // precisa da função empresaExiste()
+      } catch (e) {
+        console.warn("empresaExiste falhou:", e);
+      }
+
+      if (!existe) {
+        alert("❌ Essa empresa foi apagada ou não existe mais.\n\nLogin bloqueado.");
+
+        // opcional: remove o login órfão do índice pra não ficar “sobrando”
+        try { await removerLoginDoIndice(user); } catch {}
+
+        try { limparSessao(); } catch {}
+        try { mostrarTelaLogin(); } catch {}
+        return;
+      }
+    }
+
+    // 6) carrega dados da empresa atual
+    await carregarDadosUmaVezParaLogin();
+
+    // 7) BLOQUEIO MANUAL (master ignora)
+    if (tipoReal !== "MASTER") {
+      const bloqueada =
+        (typeof empresaEstaBloqueada === "function")
+          ? empresaEstaBloqueada(empresaPerfil)
+          : (empresaPerfil && empresaPerfil.manualBlocked === true);
+
+      if (bloqueada) {
+        const msg =
+          (typeof motivoBloqueioEmpresa === "function")
+            ? motivoBloqueioEmpresa(empresaPerfil)
+            : (empresaPerfil?.manualBlockedReason || "empresa bloqueada manualmente");
+
+        alert("⛔ ACESSO BLOQUEADO\n\n" + msg);
+
+        try { limparSessao(); } catch {}
+        try { mostrarTelaLogin(); } catch {}
+        return;
+      }
+    }
+
+    const u = (usuarios || []).find(x =>
+  String(x.user || "").toLowerCase() === user &&
+  String(x.senha || "") === senha &&
+  String(x.tipo || "").toUpperCase() === tipoReal
+);
+
+// ✅ MASTER pode continuar entrando pelo índice central
+if (tipoReal !== "MASTER" && !u) {
+  alert("⛔ ACESSO REMOVIDO OU USUÁRIO INATIVO.");
+  try { limparSessao(); } catch {}
+  try { mostrarTelaLogin(); } catch {}
+  return;
+}
+
+const userObj = u || {
+  tipo: tipoReal,
+  nome: String(tipoReal),
+  user,
+  senha,
+  empresaId: (tipoReal === "MASTER" ? EMPRESA_PRINCIPAL : empresaDoUser)
+};
+
+salvarSessao(userObj);
+
+    // 10) aplica permissões/UI
+    aplicarClassePermissaoBody();
+    aplicarPermissoesMenu();
+    aplicarPermissoesUI();
+    aplicarPermissaoBotaoDeposito();
+    esconderBotaoCadastrarMaquina();
+    ativarProtecaoCadastroMaquina();
+
+    // 11) liga sincronização
+    pararSnapshotAtual();
+    __syncAtivo = false;
+    await iniciarSincronizacaoFirebase();
+
+    // 12) mensagem pro colab
+    if (userObj.tipo === "COLAB") {
+      const nomeBonito = await getNomeBonitoEmpresa(userObj.empresaId);
+      alert("✅ Entrou na empresa: " + (nomeBonito || userObj.empresaId || "SEM EMPRESA"));
+    }
+
+    // 13) abre app
+    mostrarApp();
+    aplicarPermissoesUI();
+    aplicarPermissoesMenu();
+    atualizarAlertaOcorrencias();
+
+    // opcional seu
+    try { esconderTrocaSenhaMasterForaDaStronda(); } catch {}
+
+  } catch (e) {
+    console.error("❌ erro no entrarLogin:", e);
+    alert("❌ erro ao entrar. veja o console (F12).");
+  } finally {
+    // ✅ garante que o botão volta SEMPRE
+    habilitarBotaoLogin();
   }
 }
 
+async function removerColaborador(id) {
+  if (!exigirAdmin()) return;
 
+  const idx = (usuarios || []).findIndex(u => Number(u.id) === Number(id));
+  if (idx < 0) return alert("❌ Colaborador não encontrado.");
 
-function aplicarPermissoesMenu() {
-  const btnSel = document.getElementById("btnSelecionarEmpresa");
-  if (!btnSel) return; // se não achou o botão, não faz nada
-  btnSel.style.display = isMaster() ? "block" : "none";
-}
+  const u = usuarios[idx];
+  const userRemovido = String(u.user || "").toLowerCase();
+  const tipoRemovido = String(u.tipo || "").toUpperCase();
 
+  if (!confirm(`Remover acesso de ${u.nome || u.user}?`)) return;
 
+  usuarios.splice(idx, 1);
 
+  await salvarNoFirebase(true);
 
-function entrarLogin(tipo) {
-  if (!firebasePronto) {
-    return alert("⏳ Carregando do Firebase... aguarde 2 segundos e tente novamente.");
+  // ✅ se o removido for o logado na sessão atual, derruba na hora
+  if (
+    sessaoUsuario &&
+    String(sessaoUsuario.user || "").toLowerCase() === userRemovido &&
+    String(sessaoUsuario.tipo || "").toUpperCase() === tipoRemovido
+  ) {
+    limparSessao();
+    mostrarTelaLogin();
+    alert("⛔ Seu acesso foi removido.");
+    return;
   }
 
-  tipo = String(tipo || "").toUpperCase();
-  if (tipo.includes("ADMIN")) tipo = "ADMIN";
-  if (tipo.includes("COLAB")) tipo = "COLAB";
+  listarColaboradores();
+  alert("✅ Colaborador removido e sem acesso.");
+}
 
-  
-  const user = (document.getElementById("loginUser")?.value || "").trim().toLowerCase();
-  const senha = (document.getElementById("loginSenha")?.value || "").trim();
+function validarSessaoAtualContraUsuarios() {
+  if (!sessaoUsuario) return true;
 
-  if (!user || !senha) return alert("❌ Preencha usuário e senha.");
+  const tipo = String(sessaoUsuario.tipo || "").toUpperCase();
 
-  // 1) pega todos que batem user/senha + tipo
-const candidatos = (usuarios || []).filter(x => {
-  const t = String(x.tipo || "").toUpperCase();
+  // MASTER continua livre
+  if (tipo === "MASTER") return true;
 
-  const okTipo = (tipo === "ADMIN")
-    ? (t === "ADMIN" || t === "MASTER")
-    : (t === "COLAB");
+  const ok = (usuarios || []).some(u =>
+    String(u.user || "").toLowerCase() === String(sessaoUsuario.user || "").toLowerCase() &&
+    String(u.tipo || "").toUpperCase() === tipo &&
+    String(u.empresaId || "").toUpperCase() === String(sessaoUsuario.empresaId || "").toUpperCase() &&
+    u.ativo !== false
+  );
 
-  const okLogin =
-    okTipo &&
-    String(x.user || "").toLowerCase() === user &&
-    String(x.senha || "") === senha;
-
-  if (!okLogin) return false;
-
-  // se for ADMIN normal, só entra na empresa atual
-  if (t === "ADMIN") {
-    const empUser = String(x.empresaId || "").toUpperCase();
-    const empAtual = String(empresaAtualId || "").toUpperCase();
-    return empUser === empAtual;
+  if (!ok) {
+    limparSessao();
+    mostrarTelaLogin();
+    alert("⛔ Seu acesso foi removido.");
+    return false;
   }
 
   return true;
-});
-
-// 2) ✅ prioridade: MASTER primeiro
-const u =
-  candidatos.find(x => String(x.tipo || "").toUpperCase() === "MASTER") ||
-  candidatos[0];
-
-
-
-
-  if (!u) return alert("❌ Login inválido.");
-
-  salvarSessao(u);
-
-  pararSnapshotAtual();
-__syncAtivo = false;
-iniciarSincronizacaoFirebase(); // agora vai ligar snapshot porque sessaoUsuario existe
-
-
-    if (u.tipo === "COLAB") {
-    alert("✅ Entrou na empresa: " + (u.empresaId || "SEM EMPRESA"));
-  }
-
-  mostrarApp();
-  aplicarPermissoesUI();
-  aplicarPermissoesMenu();
-  atualizarAlertaOcorrencias();
 }
-
 
 
 // =====================
@@ -1076,6 +3226,7 @@ if (!empresaId) return alert("❌ Empresa atual não definida.");
 
 
   salvarNoFirebase();
+salvarLoginIndex({ user, tipo:"COLAB", empresaId, senha, nome });
 
   document.getElementById("colabNome").value = "";
   document.getElementById("colabUser").value = "";
@@ -1092,6 +3243,14 @@ function normalizarWhats(valor) {
   if (n.length > 11) n = n.slice(0, 11);       // limita
   return n.length >= 10 ? n : "";              // valida DDD + num
 }
+
+function limparSessao() {
+  sessaoUsuario = null;
+  localStorage.removeItem("sessaoUsuario");
+  window.__sessao = null;
+}
+
+
 
 function listarColaboradoresComWhats() {
   const empAtual = String(empresaAtualId || "").toUpperCase();
@@ -1142,6 +3301,29 @@ function abrirWhatsTexto(tel, msg) {
 
   return true;
 }
+
+
+function aplicarPermissaoBotaoDeposito() {
+  const btn = document.getElementById("btnMaquinasDeposito");
+  if (!btn) return;
+
+  // ✅ mostra pra todo mundo logado (ADMIN, MASTER e COLAB)
+  const logado = !!window.sessaoUsuario;
+  btn.style.display = logado ? "block" : "none";
+}
+
+
+function abrirMaquinasDeposito() {
+  if (!window.sessaoUsuario) {
+    alert("❌ Faça login primeiro.");
+    mostrarTelaLogin();
+    return;
+  }
+  window.filtroMaquinas = "DEPOSITO";
+  abrir("clientes");
+  try { listarMaquinas(); } catch (e) {}
+}
+window.abrirMaquinasDeposito = abrirMaquinasDeposito;
 
 
 
@@ -1342,18 +3524,102 @@ async function salvarOcorrenciaPublica() {
 }
 
 
+function pegarNumeroJB(valor) {
+  const n = parseInt(String(valor || "").replace(/\D/g, ""), 10);
+  return Number.isFinite(n) ? n : 0;
+}
 
 
-function normalizarStatus(s) {
-  return (s || "ALUGADA")
+if (Array.isArray(maquinas)) {
+  maquinas.sort((a,b)=> pegarNumeroJB(a.numero)-pegarNumeroJB(b.numero));
+}
+
+
+
+function _normTxt(s) {
+  return (s || "")
     .toString()
-    .trim()
-    .toUpperCase()
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, ""); // tira acento: DEPÓSITO -> DEPOSITO
+    .replace(/[\u0300-\u036f]/g, "") // remove acentos
+    .toUpperCase()
+    .trim();
+}
+
+// ✅ detecta depósito por status OU pelo nome do estab
+function ehDeposito(m) {
+  const st = String(m?.status || "").trim().toUpperCase();
+
+  // depósito = SOMENTE pelo STATUS
+  if (typeof isDepositoStatus === "function") return isDepositoStatus(st);
+
+  return (st === "DEPOSITO" || st === "DEPÓSITO");
+}
+
+
+function esconderCadastroMaquinaParaColab() {
+  // admin/master vê
+  if (typeof window.isAdmin === "function" && window.isAdmin()) return;
+
+  // ✅ forma mais segura: pelo ID do botão
+  const btn = document.getElementById("btnCadastrarMaquina");
+  if (btn) btn.style.display = "none";
+
+  // ✅ fallback: se não tiver ID (caso esqueça no HTML), tenta pelo texto
+  const menu =
+    document.getElementById("menu") ||
+    document.getElementById("sidebar") ||
+    document.querySelector(".menu") ||
+    document.querySelector(".sidebar") ||
+    document.body;
+
+  const alvo = _normTxt("CADASTRAR MAQUINA"); // o seu botão é "Cadastrar Máquina"
+
+  const itens = menu.querySelectorAll("button, a, [role='button'], .btn, li, div");
+  itens.forEach((el) => {
+    const t = _normTxt(el.textContent);
+    if (t.includes(alvo)) el.style.display = "none";
+  });
+}
+
+function ativarProtecaoCadastroMaquina() {
+  // ✅ não logou ainda? não mexe no menu
+  if (!window.sessaoUsuario) return;
+
+  // ✅ admin/master NÃO precisam dessa proteção
+  if (typeof window.isAdmin === "function" && window.isAdmin()) return;
+
+  // ✅ roda 1x agora (somente COLAB)
+  try {
+    esconderCadastroMaquinaParaColab();
+  } catch (e) {
+    console.warn("⚠️ esconderCadastroMaquinaParaColab falhou:", e);
+  }
+
+  // ✅ evita criar vários observers
+  if (window.__obsCadMaq) return;
+
+  // ✅ observa mudanças no DOM e reaplica (somente COLAB)
+  window.__obsCadMaq = new MutationObserver(() => {
+    // se virou admin depois (troca de sessão), para de aplicar
+    if (typeof window.isAdmin === "function" && window.isAdmin()) return;
+
+    try {
+      esconderCadastroMaquinaParaColab();
+    } catch {}
+  });
+
+  window.__obsCadMaq.observe(document.body, {
+    childList: true,
+    subtree: true,
+  });
 }
 
 function abrir(id) {
+  // ✅ BLOQUEIO: cadastro só ADMIN/MASTER
+  if (id === "cadastro") {
+    if (typeof exigirAdmin === "function" && !exigirAdmin()) return;
+  }
+
   const menu = document.getElementById("menu");
 
   // 1) esconde o menu
@@ -1378,17 +3644,29 @@ function abrir(id) {
   // 4) sobe pro topo
   window.scrollTo({ top: 0, behavior: "auto" });
 
+  // ✅ quando abre COLABORADORES
   if (id === "colaboradores") {
-  try { listarColaboradores(); } catch(e) { console.log(e); }
-}
+    try { listarColaboradores(); } catch (e) { console.log(e); }
+    try { esconderBotaoCadastrarMaquina(); } catch (e) { console.log(e); }
+  }
 
-if (id === "selecionarEmpresa") {
-  listarEmpresasUI().catch(console.error);
-}
+  // ✅ quando abre SELECIONAR EMPRESA
+  if (id === "selecionarEmpresa") {
+    try { listarEmpresasUI().catch(console.error); } catch (e) { console.log(e); }
+  }
+
+  // ✅ quando abre CLIENTS (lista de máquinas)
+  if (id === "clients") {
+    try { listarMaquinas(); } catch (e) { console.log(e); }
+  }
 }
 
 
 function voltar() {
+  // ✅ LIMPA filtro quando voltar pro menu (resolve o bug do depósito)
+  window.filtroMaquinas = "";
+  try { listarMaquinas(); } catch(e) {}
+
   // esconde todas as telas internas
   document.querySelectorAll("#app .box").forEach(sec => {
     sec.classList.add("escondido");
@@ -1405,66 +3683,67 @@ function voltar() {
   window.scrollTo({ top: 0, behavior: "auto" });
 }
 
+function abrirMaquinasCadastradas() {
+  window.filtroMaquinas = "CADASTRADAS"; // ✅ exclui depósito
+  abrir("clientes");
+  try { listarMaquinas(); } catch (e) {}
+}
+window.abrirMaquinasCadastradas = abrirMaquinasCadastradas;
+
+
+function normalizarStatus(s) {
+  return (s || "ALUGADA")
+    .toString()
+    .trim()
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+
+
+function formatarTelefoneBR(valor) {
+  let n = String(valor || "").replace(/\D/g, "");
+
+  // se vier com 55, remove
+  if (n.startsWith("55") && n.length >= 12) n = n.slice(2);
+
+  // limita
+  if (n.length > 11) n = n.slice(0, 11);
+
+  const ddd = n.slice(0, 2);
+  const num = n.slice(2);
+
+  if (n.length <= 2) return n;
+  if (n.length <= 6) return `(${ddd}) ${num}`;
+  if (n.length === 10) return `(${ddd}) ${num.slice(0,4)}-${num.slice(4)}`;      // fixo
+  if (n.length === 11) return `(${ddd}) ${num.slice(0,5)}-${num.slice(5)}`;      // celular
+
+  return `(${ddd}) ${num}`;
+}
 
 
 /* ======================
-   CADASTRO DE MÁQUINA
-   (NÃO MEXE NA LÓGICA QUE JÁ FUNCIONOU)
+   CADASTRO DE MÁQUINA (SÓ NÚMMERO)
+   - Não pode repetir (inclui depósito porque depósito também está em "maquinas")
+   - Salva e volta igual os demais
+   - ✅ GARANTE que Firestore receba o array "maquinas" (pra tela pública funcionar)
 ====================== */
-async function salvarMaquina() {
-  const numero = $("numMaquina").value.trim().toUpperCase();
-  const estab = $("nomeEstab").value.trim().toUpperCase();
-  const cliente = ($("nomeCliente")?.value || "").trim().toUpperCase();
-  const enderecoTxt = ($("endereco")?.value || "").trim().toUpperCase();
-  const porc = Number($("porcBase")?.value || 0);
-  const fone = ($("foneCliente")?.value || "").trim();
 
-  const nums = fone.replace(/\D/g, "").slice(0, 11);
-  const ddd = nums.slice(0, 2);
-  const tel = nums.slice(2);
 
-  if (!numero || !estab) {
-    alert("❌ Preencha o número da jukebox e o estabelecimento");
-    return;
-  }
+function normalizarEmpId(empId) {
+  empId = String(empId || "").trim().toUpperCase();
+  if (!empId) return "";
 
-  const numeroExiste = maquinas.some((m) => String(m.numero).toUpperCase() === numero);
-  if (numeroExiste) {
-    alert("⚠️ Essa jukebox já está cadastrada");
-    return;
-  }
+  // se você já tiver normalizaEmpresaId no projeto, usa ela
+  try {
+    if (typeof normalizaEmpresaId === "function") return normalizaEmpresaId(empId);
+  } catch {}
 
-  const lat = cadastroGeoTemp?.lat ?? null;
-  const lng = cadastroGeoTemp?.lng ?? null;
-
-  maquinas.push({
-    numero,
-    estab,
-    cliente,
-    endereco: enderecoTxt,
-    porcBase: porc,
-    ddd,
-    tel,
-    foneFormatado: formatarTelefoneBR(fone),
-    lat,
-    lng,
-    resetStatusAt: null,
-  });
-
-  cadastroGeoTemp = null;
-
-  
-
-  alert("✅ Máquina cadastrada com sucesso");
-  voltar();
-
-  $("numMaquina").value = "";
-  $("nomeEstab").value = "";
-  if ($("nomeCliente")) $("nomeCliente").value = "";
-  if ($("endereco")) $("endereco").value = "";
-  if ($("porcBase")) $("porcBase").value = "";
-  if ($("foneCliente")) $("foneCliente").value = "";
+  // fallback: troca espaços por hífen e remove duplicados
+  return empId.replace(/\s+/g, "-").replace(/-+/g, "-");
 }
+window.normalizarEmpId = normalizarEmpId;
 
 
 /* ======================
@@ -1483,37 +3762,118 @@ function acharMaquinaPorCampos() {
 }
 
 // AUTO PELO NÚMERO
-function autoPorNumero() {
+async function autoPorNumero() {
   const campoNum = $("numAcerto");
   const campoEstab = $("estabAcerto");
   const rAnt = $("relogioAnterior");
+  const pixEl = $("pix");
 
   if (!campoNum || !campoEstab) return;
+
+  aplicarPermissaoPixAcerto();
 
   campoNum.value = campoNum.value.toUpperCase();
 
   const numeroDigitado = campoNum.value.trim().toUpperCase();
+
   if (!numeroDigitado) {
     campoEstab.value = "";
     if (rAnt) rAnt.value = "";
+    if (pixEl) pixEl.value = "";
+
+    inicioPixAtual = "";
+    fimPixAtual = "";
+    pixMaquinaIdAtual = "";
+
+    limparPorcentagemAcerto();
     atualizarPreviewAcerto();
     return;
   }
 
-  const maquina = maquinas.find((m) => String(m.numero).toUpperCase() === numeroDigitado);
+  const maquina = maquinas.find(
+    (m) => String(m.numero || "").toUpperCase() === numeroDigitado
+  );
 
   if (maquina) {
     campoEstab.value = String(maquina.estab || "").toUpperCase();
 
-    // ✅ aqui é o pulo do gato: coloca o último relógio como "anterior"
-    if (rAnt) rAnt.value = maquina.ultimoRelogio != null ? String(maquina.ultimoRelogio) : "";
+    if (rAnt) {
+      rAnt.value = maquina.ultimoRelogio != null ? String(maquina.ultimoRelogio) : "";
+    }
+
+    percAcertoTravadoPeloUser = false;
+    aplicarPorcBaseNoAcerto(maquina);
+
+    inicioPixAtual = "";
+    fimPixAtual = "";
+    pixMaquinaIdAtual = "";
+
+    if (pixEl && maquina.pixMaquinaId) {
+      try {
+        pixEl.value = "";
+
+        const ultimoAcerto = [...(acertos || [])]
+          .filter(a =>
+            String(a.numero || "").toUpperCase() === String(maquina.numero || "").toUpperCase()
+          )
+          .sort((a, b) => new Date(b.data) - new Date(a.data))[0];
+
+        const inicio = ultimoAcerto?.data || "2026-01-01T00:00:00.000Z";
+        const fim = new Date().toISOString();
+
+        inicioPixAtual = inicio;
+        fimPixAtual = fim;
+        pixMaquinaIdAtual = maquina.pixMaquinaId || "";
+
+        pixEl.value = "buscando...";
+
+        const totalPix = await buscarPixAcertoHeroku(maquina.pixMaquinaId, inicio, fim);
+
+        pixEl.value = totalPix.toFixed(2);
+        aplicarPermissaoPixAcerto();
+        atualizarPreviewAcerto();
+
+        console.log("✅ PIX automático:", totalPix, "início:", inicio, "fim:", fim);
+
+      } catch (e) {
+        console.error("❌ Erro ao buscar PIX automático:", e);
+        pixEl.value = "";
+        inicioPixAtual = "";
+        fimPixAtual = "";
+        pixMaquinaIdAtual = "";
+        alert("❌ Não consegui buscar o PIX automático dessa máquina.");
+      }
+    } else {
+      if (pixEl) pixEl.value = "";
+    }
+
   } else {
     campoEstab.value = "";
     if (rAnt) rAnt.value = "";
+    if (pixEl) pixEl.value = "";
+
+    inicioPixAtual = "";
+    fimPixAtual = "";
+    pixMaquinaIdAtual = "";
+
+    limparPorcentagemAcerto();
   }
 
+  aplicarPermissaoPixAcerto();
   atualizarPreviewAcerto();
 }
+
+
+function aplicarPermissaoPixAcerto() {
+  const pixEl = document.getElementById("pix");
+  if (!pixEl) return;
+
+  const admin = typeof isAdmin === "function" && isAdmin();
+
+  pixEl.readOnly = !admin;
+  pixEl.style.opacity = admin ? "1" : "0.75";
+}
+
 
 // AUTO PELO ESTABELECIMENTO
 function autoPorEstab() {
@@ -1529,6 +3889,7 @@ function autoPorEstab() {
   if (!estabDigitado) {
     campoNum.value = "";
     if (rAnt) rAnt.value = "";
+    limparPorcentagemAcerto();
     atualizarPreviewAcerto();
     return;
   }
@@ -1538,15 +3899,21 @@ function autoPorEstab() {
   if (maquina) {
     campoNum.value = String(maquina.numero || "").toUpperCase();
 
-    // ✅ aqui também: coloca o último relógio como "anterior"
+    // coloca o último relógio como "anterior"
     if (rAnt) rAnt.value = maquina.ultimoRelogio != null ? String(maquina.ultimoRelogio) : "";
+
+    // ✅ aplica % base (porcBase) no acerto
+    percAcertoTravadoPeloUser = false;
+    aplicarPorcBaseNoAcerto(maquina);
   } else {
     campoNum.value = "";
     if (rAnt) rAnt.value = "";
+    limparPorcentagemAcerto();
   }
 
   atualizarPreviewAcerto();
 }
+
 
 /* ===== Preview (mostra valores antes de salvar) ===== */
 function atualizarPreviewAcerto() {
@@ -1622,10 +3989,58 @@ function atualizarPreviewAcerto() {
   `;
 }
 
+// ======================
+// ACERTO: % do Cliente pega da base (porcBase) da máquina
+// - Preenche automaticamente quando achar a máquina
+// - Se o usuário mexer no campo, não sobrescreve mais
+// ======================
+let percAcertoTravadoPeloUser = false;
+let ultimoNumeroAcertoAplicado = null;
+
+function aplicarPorcBaseNoAcerto(maquina) {
+  const percEl = document.getElementById("porcentagem");
+  if (!percEl) return;
+
+  const base = maquina?.porcBase;
+
+  // se não tem base salva, não faz nada
+  if (base == null || base === "") return;
+
+  // só aplica se o usuário ainda não mexeu OU se mudou de máquina
+  const mudouMaquina = String(maquina.numero || "") !== String(ultimoNumeroAcertoAplicado || "");
+
+  if (!percAcertoTravadoPeloUser || mudouMaquina) {
+    percEl.value = String(base);
+    ultimoNumeroAcertoAplicado = String(maquina.numero || "");
+    atualizarPreviewAcerto(); // recalcula na hora
+  }
+}
+
+// se o usuário mexer na porcentagem, para de auto sobrescrever
+document.addEventListener("input", (e) => {
+  if (e.target && e.target.id === "porcentagem") {
+    percAcertoTravadoPeloUser = true;
+  }
+});
+
+// helper para limpar % quando não achar máquina
+function limparPorcentagemAcerto() {
+  const p = document.getElementById("porcentagem");
+  if (p) p.value = "";
+  ultimoNumeroAcertoAplicado = null;
+  percAcertoTravadoPeloUser = false;
+  atualizarPreviewAcerto();
+}
+
+
 /* ===== SALVAR ACERTO ===== */
-function salvarAcerto() {
+async function salvarAcerto() {
   const maquina = acharMaquinaPorCampos();
 
+  if (maquina && maquina.pixMaquinaId) {
+  console.log("ID PIX DA MÁQUINA:", maquina.pixMaquinaId);
+}
+  
   if (!maquina) {
     alert("❌ Máquina não encontrada (confira número ou estabelecimento)");
     return;
@@ -1696,23 +4111,43 @@ function salvarAcerto() {
   const especieRecolher = diff > 0 ? diff : 0;
   const repassarCliente = diff < 0 ? Math.abs(diff) : 0;
 
-  acertos.push({
+    acertos.push({
     numero: maquina.numero,
     estab: maquina.estab,
     relogioAnterior: rAnt,
     relogioAtual: rAtu,
     totalRelogio: totalRelogio,
     pix: pixV,
+    pixMaquinaId: pixMaquinaIdAtual || maquina.pixMaquinaId || "",
+    dataInicioPix: inicioPixAtual || "",
+    dataFimPix: fimPixAtual || "",
     dinheiro: dinV,
     porcentagem: perc,
     cliente: clienteV,
     empresa: empresaV,
     especieRecolher,
     repassarCliente,
-    data: new Date().toISOString(),
+    data: isoLocalAgora(),
   });
 
-  maquina.ultimoRelogio = rAtu;
+  // ✅ ATUALIZA RELÓGIO (BLINDADO)
+const relogioAnteriorMaquina = Number(maquina.ultimoRelogio || 0);
+
+maquina.ultimoRelogio = rAtu;
+maquina.relogioAtualizadoEm = new Date().toISOString();
+maquina.relogioOrigem = "ACERTO";
+
+// ✅ HISTÓRICO (NUNCA MAIS PERDE)
+if (!Array.isArray(maquina.historicoRelogios)) {
+  maquina.historicoRelogios = [];
+}
+
+maquina.historicoRelogios.push({
+  tipo: "ACERTO",
+  antes: relogioAnteriorMaquina,
+  depois: rAtu,
+  data: new Date().toISOString()
+});
 
   salvarNoFirebase();
 
@@ -1729,6 +4164,26 @@ function salvarAcerto() {
   if (res) res.innerHTML = "";
 
   voltar();
+}
+
+async function buscarPixAcertoHeroku(pixMaquinaId, inicio, fim) {
+  const url = `https://stronda-music-pix-v4-47b3ce8502e4.herokuapp.com/total-pix-acerto/${pixMaquinaId}`;
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ inicio, fim })
+  });
+
+  if (!resp.ok) {
+    const txt = await resp.text();
+    throw new Error("Erro ao buscar PIX na Heroku: " + txt);
+  }
+
+  const dados = await resp.json();
+  return Number(dados.totalPix || 0);
 }
 
 
@@ -1763,6 +4218,43 @@ function voltarParaStatus() {
 
   window.scrollTo({ top: 0, behavior: "auto" });
 }
+
+
+function fcSetDiarioHoje() {
+  const ini = document.getElementById("fcIni");
+  const fim = document.getElementById("fcFim");
+  if (!ini || !fim) return;
+
+  const hoje = new Date();
+  const y = hoje.getFullYear();
+  const m = String(hoje.getMonth() + 1).padStart(2, "0");
+  const d = String(hoje.getDate()).padStart(2, "0");
+  const v = `${y}-${m}-${d}`;
+
+  ini.value = v;
+  fim.value = v;
+}
+
+
+function fcSetMensalAtual() {
+  const ini = document.getElementById("fcIni");
+  const fim = document.getElementById("fcFim");
+  if (!ini || !fim) return;
+
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth(); // 0-11
+
+  const first = new Date(y, m, 1, 12, 0, 0);
+  const last  = new Date(y, m + 1, 0, 12, 0, 0);
+
+  const f = (d) =>
+    `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+
+  ini.value = f(first);
+  fim.value = f(last);
+}
+
 
 
 function abrirDetalhesCliente(estab) {
@@ -1855,46 +4347,184 @@ function arred2(n) {
 }
 
 
-// ====== LISTA DE MÁQUINAS ======
-function listarMaquinas() {
-  const listaMaquinas = $("listaMaquinas");
-  if (!listaMaquinas) return;
 
-  listaMaquinas.innerHTML = "";
-
-  if (!maquinas.length) {
-    listaMaquinas.innerHTML = "<li>Nenhuma máquina cadastrada</li>";
-    return;
-  }
-
-  maquinas.forEach((m) => {
-    const status = (m.status || "ALUGADA").toUpperCase();
-    const li = document.createElement("li");
-    li.textContent = `${String(m.estab).toUpperCase()} (JB Nº ${String(m.numero).toUpperCase()}) — ${status}`;
-    li.style.cursor = "pointer";
-
-    // ✅ clicar abre detalhes/edição
-    li.onclick = () => abrirDetalheMaquina(m.numero);
-
-    listaMaquinas.appendChild(li);
+function corrigirStatusMaquinas() {
+  if (!Array.isArray(maquinas)) return;
+  maquinas.forEach(m => {
+    m.status = normalizarStatus(m.status);
   });
 }
 
 
-// ====== ABRIR DETALHE ======
+// ====== LISTA DE MÁQUINAS ======
+// ====== LISTA DE MÁQUINAS ======
+function listarMaquinas() {
+  const ul = document.getElementById("listaMaquinas");
+  if (!ul) return;
+
+  const listaBase = Array.isArray(maquinas) ? maquinas.slice() : [];
+
+  // filtro: "DEPOSITO" ou "CADASTRADAS"
+  const filtro = String(window.filtroMaquinas || "").toUpperCase().trim();
+
+  // ✅ filtro robusto (depósito por status OU por estab)
+  const lista = listaBase.filter((m) => {
+    const depo = ehDeposito(m);
+
+    // ✅ DEPÓSITO: só depósito
+    if (filtro === "DEPOSITO") return depo;
+
+    // ✅ CADASTRADAS: NÃO mostra depósito
+    if (filtro === "CADASTRADAS") return !depo;
+
+    // sem filtro: mostra tudo
+    return true;
+  });
+
+  // ordena por número (com compare numérico)
+  lista.sort((a, b) => {
+    const na = String(a?.numero ?? "").trim();
+    const nb = String(b?.numero ?? "").trim();
+    return na.localeCompare(nb, "pt-BR", { numeric: true, sensitivity: "base" });
+  });
+
+  // ✅ Atualiza o título com quantidade
+  const titulo = document.getElementById("tituloMaquinas");
+  if (titulo) {
+    const nomeTela =
+      (filtro === "DEPOSITO") ? "Máquinas no Depósito" :
+      (filtro === "CADASTRADAS") ? "Máquinas Cadastradas" :
+      "Máquinas";
+
+    titulo.textContent = `👥 ${nomeTela} (${lista.length})`;
+  }
+
+  ul.innerHTML = "";
+
+  lista.forEach((m) => {
+    const numero = String(m?.numero ?? "").trim();
+    const estab  = String(m?.estab ?? m?.nomeEstab ?? "").trim();
+    const status = String(m?.status ?? "").trim();
+    const fotoSrc = String(m?.fotoUrl || m?.foto || "").trim();
+
+    const li = document.createElement("li");
+    li.style.display = "flex";
+    li.style.alignItems = "center";
+    li.style.justifyContent = "space-between";
+    li.style.gap = "12px";
+    li.style.cursor = "pointer";
+
+    const thumb = document.createElement("div");
+    thumb.style.width = "56px";
+    thumb.style.height = "56px";
+    thumb.style.borderRadius = "12px";
+    thumb.style.background = "#0f172a";
+    thumb.style.display = "flex";
+    thumb.style.alignItems = "center";
+    thumb.style.justifyContent = "center";
+    thumb.style.flex = "0 0 56px";
+    thumb.style.overflow = "hidden";
+
+    if (fotoSrc) {
+      const img = document.createElement("img");
+      img.src = fotoSrc;
+      img.alt = "foto";
+      img.style.width = "100%";
+      img.style.height = "100%";
+      img.style.objectFit = "cover";
+      thumb.appendChild(img);
+    } else {
+      thumb.textContent = "📷";
+      thumb.style.fontSize = "22px";
+      thumb.style.opacity = "0.9";
+    }
+
+    // ✅ clique no quadrado abre foto cheia
+    thumb.style.cursor = "pointer";
+    thumb.onclick = (e) => {
+      e.stopPropagation();
+      try { abrirFotoMaquina(numero); } catch (err) { console.error(err); }
+    };
+
+    const info = document.createElement("div");
+    info.style.flex = "1";
+    info.style.textAlign = "left";
+
+    const t1 = document.createElement("div");
+    t1.style.fontWeight = "900";
+    t1.style.letterSpacing = "0.4px";
+    t1.textContent = (estab || "SEM ESTABELECIMENTO").toUpperCase();
+
+    const t2 = document.createElement("div");
+    t2.style.opacity = "0.9";
+    t2.style.marginTop = "2px";
+
+    // ✅ REGRA: em CADASTRADAS não mostra status (porque todas já estão alugadas)
+    const filtroAtual = String(window.filtroMaquinas || "").toUpperCase().trim();
+    const mostrarStatus = (filtroAtual !== "CADASTRADAS");
+
+    // status normalizado só pra mostrar (evita "DEPÓSITO" vs "DEPOSITO" confuso)
+    const statusShow = normalizarStatus(status);
+
+    t2.textContent = `JB Nº ${numero || "?"}${(mostrarStatus && statusShow) ? " • " + statusShow : ""}`;
+
+    info.appendChild(t1);
+    info.appendChild(t2);
+
+    li.appendChild(thumb);
+    li.appendChild(info);
+
+    li.onclick = () => {
+  try {
+    window.maquinaSelecionadaNumero = numero;
+    if (typeof abrir === "function") abrir("detalheMaquina");
+
+    const detNumero   = document.getElementById("detNumero");
+    const detEstab    = document.getElementById("detEstab");
+    const detCliente  = document.getElementById("detCliente");
+    const detFone     = document.getElementById("detFone");
+    const detEndereco = document.getElementById("detEndereco");
+    const detStatus   = document.getElementById("detStatus");
+    const detRota     = document.getElementById("detRota");
+
+    if (detNumero) detNumero.value = numero;
+    if (detEstab) detEstab.value = estab;
+    if (detCliente) detCliente.value = String(m?.cliente ?? m?.nomeCliente ?? "").trim();
+    if (detFone) detFone.value = String(m?.tel ?? m?.fone ?? m?.foneCliente ?? "").trim();
+    if (detEndereco) detEndereco.value = String(m?.endereco ?? "").trim();
+    if (detStatus) detStatus.value = normalizarStatus(m?.status || "ALUGADA");
+
+    if (detRota) preencherSelectRotas(String(m?.rota || "").trim().toUpperCase());
+
+    if (typeof carregarMaquinaPorNumero === "function") carregarMaquinaPorNumero();
+  } catch (e) {
+    console.error(e);
+  }
+};
+
+    ul.appendChild(li);
+  });
+}
+
+
+
+// ====== ABRIR DETALHE (CORRIGIDA) ======
 function abrirDetalheMaquina(numero) {
   maquinaSelecionadaNumero = String(numero || "").trim().toUpperCase();
 
-  abrir("detalheMaquina"); // ou o id certo da sua tela de detalhe
+  abrir("detalheMaquina");
 
-  const m = maquinas.find(x => String(x.numero || "").toUpperCase() === maquinaSelecionadaNumero);
+  const m = (maquinas || []).find(
+    x => String(x.numero || "").trim().toUpperCase() === maquinaSelecionadaNumero
+  );
+
   if (!m) {
     alert("Máquina não encontrada");
     voltar();
     return;
   }
 
-  // preencher campos
+  // elementos
   const tituloMaquina = document.getElementById("tituloMaquina");
   const detNumero   = document.getElementById("detNumero");
   const detEstab    = document.getElementById("detEstab");
@@ -1903,27 +4533,103 @@ function abrirDetalheMaquina(numero) {
   const detStatus   = document.getElementById("detStatus");
   const detFone     = document.getElementById("detFone");
 
-  if (tituloMaquina) tituloMaquina.textContent = `🔧 ${m.estab} (JB Nº ${m.numero})`;
+  // extras
+  const detCpf      = document.getElementById("detCpf");
+  const detRg       = document.getElementById("detRg");
+  const detPorcBase = document.getElementById("detPorcBase");
+  const erroCpfRg   = document.getElementById("erroCpfRgDetalhe");
 
-  if (detNumero)  detNumero.value  = String(m.numero || "");
-  if (detEstab)   detEstab.value   = String(m.estab || "").toUpperCase();
-  if (detCliente) detCliente.value = String(m.cliente || "").toUpperCase();
+  // ✅ comportamento automático DEPÓSITO (limpa tudo e trava)
+  function aplicarUIStatusDeposito() {
+    const st = detStatus?.value || "ALUGADA";
 
-  // endereço/gps
-  if (detEndereco) {
-    if (m.lat != null && m.lng != null) detEndereco.value = `LAT:${Number(m.lat).toFixed(6)} | LNG:${Number(m.lng).toFixed(6)}`;
-    else detEndereco.value = String(m.endereco || "").toUpperCase();
+    const dep = (typeof isDepositoStatus === "function")
+      ? isDepositoStatus(st)
+      : (String(st || "").toUpperCase() === "DEPOSITO" || String(st || "").toUpperCase() === "DEPÓSITO");
+
+    function lock(el, val, title) {
+      if (!el) return;
+      if (val !== undefined) el.value = val;
+      el.disabled = true;
+      el.readOnly = true;
+      el.style.opacity = "0.7";
+      el.style.cursor = "not-allowed";
+      el.title = title || "";
+    }
+
+    function unlock(el) {
+      if (!el) return;
+      el.disabled = false;
+      el.readOnly = false;
+      el.style.opacity = "1";
+      el.style.cursor = "text";
+      el.title = "";
+    }
+
+    if (dep) {
+      lock(detEstab, (typeof labelDeposito === "function") ? labelDeposito() : "DEPÓSITO", "DEPÓSITO preenche automático");
+      lock(detCliente, "", "DEPÓSITO não usa cliente");
+      lock(detCpf, "", "DEPÓSITO não usa CPF");
+      lock(detRg, "", "DEPÓSITO não usa RG");
+      lock(detPorcBase, "0", "DEPÓSITO não usa % base");
+      lock(detFone, "", "DEPÓSITO não usa telefone");
+
+      if (erroCpfRg) erroCpfRg.style.display = "none";
+    } else {
+      unlock(detEstab);
+      unlock(detCliente);
+      unlock(detCpf);
+      unlock(detRg);
+      unlock(detPorcBase);
+      unlock(detFone);
+    }
   }
 
+  // ✅ 1) seta status PRIMEIRO (isso resolve seu bug)
   if (detStatus) detStatus.value = (m.status || "ALUGADA");
-  if (detFone) detFone.value = pegarTelefoneDaMaquina(m);
 
-  // maiúsculas ao digitar
-  if (detEstab)   detEstab.oninput   = () => detEstab.value = detEstab.value.toUpperCase();
+  // ✅ 2) preenche tudo
+  if (tituloMaquina) tituloMaquina.textContent = `🔧 ${m.estab} (JB Nº ${m.numero})`;
+
+  if (detNumero) {
+    detNumero.value = String(m.numero || "");
+
+    detNumero.readOnly = true;
+    detNumero.disabled = true;
+    detNumero.style.opacity = "0.7";
+    detNumero.style.cursor = "not-allowed";
+    detNumero.title = "Número não pode ser alterado";
+  }
+
+  if (detEstab) detEstab.value = String(m.estab || "").toUpperCase();
+  if (detCliente) detCliente.value = String(m.cliente || "").toUpperCase();
+
+  if (detEndereco) {
+    if (m.lat != null && m.lng != null) {
+      detEndereco.value = `LAT:${Number(m.lat).toFixed(6)} | LNG:${Number(m.lng).toFixed(6)}`;
+    } else {
+      detEndereco.value = String(m.endereco || "").toUpperCase();
+    }
+  }
+
+  if (detFone) detFone.value = (typeof pegarTelefoneDaMaquina === "function") ? pegarTelefoneDaMaquina(m) : "";
+
+  if (detCpf) detCpf.value = String(m.cpf || "");
+  if (detRg) detRg.value = String(m.rg || "");
+  if (detPorcBase) detPorcBase.value = (m.porcBase != null ? String(m.porcBase) : "");
+  if (detPixMaquinaId) detPixMaquinaId.value = String(m.pixMaquinaId || "");
+
+  // ✅ 3) agora sim aplica DEPÓSITO no final e prende no onchange
+  if (detStatus) {
+    detStatus.onchange = aplicarUIStatusDeposito;
+    aplicarUIStatusDeposito();
+  }
+
+  // maiúsculas ao digitar (quando estiver liberado)
+  if (detEstab) detEstab.oninput = () => detEstab.value = detEstab.value.toUpperCase();
   if (detCliente) detCliente.oninput = () => detCliente.value = detCliente.value.toUpperCase();
   if (detEndereco) detEndereco.oninput = () => detEndereco.value = detEndereco.value.toUpperCase();
 }
-
 
 function carregarMaquinaPorNumero() {
   const detNumero = document.getElementById("detNumero");
@@ -1934,6 +4640,24 @@ function carregarMaquinaPorNumero() {
   const detFone = document.getElementById("detFone");
   const tituloMaquina = document.getElementById("tituloMaquina");
 
+  // ✅ NOVOS CAMPOS NO DETALHE
+  const detCpf = document.getElementById("detCpf");
+  const detRg = document.getElementById("detRg");
+  const detPorcBase = document.getElementById("detPorcBase");
+  const detPixMaquinaId = document.getElementById("detPixMaquinaId");
+  const erroCpfRg = document.getElementById("erroCpfRgDetalhe");
+
+  // ✅ PERMISSÃO DO ID PIX DA HEROKU
+  const admin = typeof isAdmin === "function" && isAdmin();
+
+  if (detPixMaquinaId) {
+    detPixMaquinaId.readOnly = !admin;
+    detPixMaquinaId.style.opacity = admin ? "1" : "0.75";
+    detPixMaquinaId.title = admin
+      ? ""
+      : "ID PIX bloqueado. Apenas administrador pode alterar.";
+  }
+
   if (!detNumero) return;
 
   const numeroInput = detNumero.value.trim().toUpperCase();
@@ -1942,108 +4666,352 @@ function carregarMaquinaPorNumero() {
   // se apagou o número, limpa tudo
   if (!numeroInput) {
     maquinaSelecionadaNumero = null;
+
     if (detEstab) detEstab.value = "";
     if (detCliente) detCliente.value = "";
     if (detEndereco) detEndereco.value = "";
     if (detStatus) detStatus.value = "ALUGADA";
     if (detFone) detFone.value = "";
     if (tituloMaquina) tituloMaquina.textContent = `🔧 Máquina`;
+
+    if (detCpf) detCpf.value = "";
+    if (detRg) detRg.value = "";
+    if (detPorcBase) detPorcBase.value = "";
+    if (detPixMaquinaId) detPixMaquinaId.value = "";
+    if (erroCpfRg) erroCpfRg.style.display = "none";
+
     return;
   }
 
   // procura a máquina
-  const m = maquinas.find(x => String(x.numero).toUpperCase() === numeroInput);
+  const m = (maquinas || []).find(
+    x => String(x.numero || "").toUpperCase() === numeroInput
+  );
 
   // não achou
   if (!m) {
     maquinaSelecionadaNumero = null;
+
     if (detEstab) detEstab.value = "";
     if (detCliente) detCliente.value = "";
     if (detEndereco) detEndereco.value = "";
     if (detStatus) detStatus.value = "ALUGADA";
     if (detFone) detFone.value = "";
     if (tituloMaquina) tituloMaquina.textContent = `🔧 Máquina não encontrada`;
+
+    if (detCpf) detCpf.value = "";
+    if (detRg) detRg.value = "";
+    if (detPorcBase) detPorcBase.value = "";
+    if (detPixMaquinaId) detPixMaquinaId.value = "";
+    if (erroCpfRg) erroCpfRg.style.display = "none";
+
     return;
   }
 
   // achou -> preenche tudo
   maquinaSelecionadaNumero = m.numero;
 
-  if (detEstab) detEstab.value = (m.estab || "").toUpperCase();
-  if (detCliente) detCliente.value = (m.cliente || "").toUpperCase();
+  if (detEstab) detEstab.value = String(m.estab || "").toUpperCase();
+  if (detCliente) detCliente.value = String(m.cliente || "").toUpperCase();
 
   if (detEndereco) {
     if (m.lat != null && m.lng != null) {
       detEndereco.value = `LAT:${Number(m.lat).toFixed(6)} | LNG:${Number(m.lng).toFixed(6)}`;
     } else {
-      detEndereco.value = (m.endereco || "").toUpperCase();
+      detEndereco.value = String(m.endereco || "").toUpperCase();
     }
   }
 
-  if (detStatus) detStatus.value = (m.status || "ALUGADA");
+  if (detStatus) detStatus.value = String(m.status || "ALUGADA").toUpperCase();
   if (detFone) detFone.value = pegarTelefoneDaMaquina(m);
 
-  if (tituloMaquina) tituloMaquina.textContent = `🔧 ${m.estab} (JB Nº ${m.numero})`;
-}
-
-let maquinaSelecionadaNumero = null;
-  
-function salvarAlteracoesMaquina() {
-  if (!exigirAdmin()) return;
-
-  const m = maquinas.find(x => x.numero == maquinaSelecionadaNumero);
-  if (!m) return alert("Máquina não encontrada");
-
-  // ✅ pega os inputs aqui dentro (escopo correto)
-  const detEstab = document.getElementById("detEstab");
-  const detCliente = document.getElementById("detCliente");
-  const detEndereco = document.getElementById("detEndereco");
-  const detStatus = document.getElementById("detStatus");
-  const detFone = document.getElementById("detFone");
-
-  const estabAntigo   = (m.estab || "").toUpperCase().trim();
-  const clienteAntigo = (m.cliente || "").toUpperCase().trim();
-
-  const estabNovo    = (detEstab?.value || "").trim().toUpperCase();
-  const clienteNovo  = (detCliente?.value || "").trim().toUpperCase();
-  const enderecoNovo = (detEndereco?.value || "").trim().toUpperCase();
-  const statusNovo   = (detStatus?.value || "ALUGADA");
-
-  if (!estabNovo) return alert("❌ O estabelecimento não pode ficar vazio");
-
-  const duplicado = maquinas.some(x =>
-    x.numero != m.numero && String(x.estab || "").toUpperCase().trim() === estabNovo
-  );
-  if (duplicado) return alert("⚠️ Já existe uma máquina com esse estabelecimento");
-
-  // ✅ atualiza dados básicos
-  m.estab = estabNovo;
-  m.cliente = clienteNovo;
-  m.endereco = enderecoNovo;
-  m.status = statusNovo;
-
-  // ✅ TELEFONE
-  const foneDigitado = (detFone?.value || "").trim();
-  const nums = foneDigitado.replace(/\D/g, "").slice(0, 11);
-
-  m.ddd = nums.slice(0, 2);
-  m.tel = nums.slice(2);
-  m.foneFormatado = formatarTelefoneBR(nums);
-
-  // (se quiser apagar acertos quando muda estab/cliente)
-  if (estabAntigo !== estabNovo || clienteAntigo !== clienteNovo) {
-    acertos = acertos.filter(a =>
-      String(a.estab || "").toUpperCase().trim() !== estabAntigo
-    );
+  if (tituloMaquina) {
+    tituloMaquina.textContent = `🔧 ${m.estab} (JB Nº ${m.numero})`;
   }
 
-  salvarNoFirebase();
+  // ✅ preenche CPF/RG
+  if (detCpf) detCpf.value = String(m.cpf || "");
+  if (detRg) detRg.value = String(m.rg || "");
 
-  alert("✅ Alterações salvas!");
+  // ✅ preenche % base
+  if (detPorcBase) {
+    detPorcBase.value = m.porcBase != null ? String(m.porcBase) : "";
+  }
 
-  const titulo = document.getElementById("tituloMaquina");
-  if (titulo) titulo.textContent = `🔧 ${m.estab} (JB Nº ${m.numero})`;
+  // ✅ ID PIX DA HEROKU — COLABORADOR VÊ, MAS NÃO ALTERA
+  if (detPixMaquinaId) {
+    detPixMaquinaId.value = String(m.pixMaquinaId || "");
+    detPixMaquinaId.readOnly = !admin;
+    detPixMaquinaId.style.opacity = admin ? "1" : "0.75";
+  }
+
+  // ✅ aviso: precisa ter CPF ou RG
+  if (erroCpfRg) {
+    const cpf = String(m.cpf || "").trim();
+    const rg = String(m.rg || "").trim();
+    erroCpfRg.style.display = !cpf && !rg ? "block" : "none";
+  }
 }
+
+
+let maquinaSelecionadaNumero = null;
+ 
+
+// ======================
+// UTIL: data/hora local em ISO (SEM mudar o dia por fuso)
+// ======================
+function isoLocalAgora(d = new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  const y = d.getFullYear();
+  const m = pad(d.getMonth() + 1);
+  const day = pad(d.getDate());
+  const h = pad(d.getHours());
+  const min = pad(d.getMinutes());
+  const s = pad(d.getSeconds());
+  return `${y}-${m}-${day}T${h}:${min}:${s}`;
+}
+
+
+async function sincronizarMaquinaPix(maquina) {
+  try {
+    if (!maquina || !maquina.pixMaquinaId) return;
+
+    const numero = String(maquina.numero || "").trim();
+    const status = String(maquina.status || "").toUpperCase();
+
+    let nomePix = String(maquina.estab || "").trim();
+    let descricaoPix = `Maquina ${numero}`;
+
+    if (status.includes("DEP")) {
+      nomePix = `Deposito Stronda Music ${numero}`;
+      descricaoPix = `Maquina ${numero}`;
+    }
+
+    if (!nomePix || !numero) return;
+
+    await fetch(`https://stronda-music-pix-v4-47b3ce8502e4.herokuapp.com/sincronizar-maquina-contabilidade/${maquina.pixMaquinaId}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        nome: nomePix,
+        descricao: descricaoPix
+      })
+    });
+
+    console.log("✅ Máquina PIX sincronizada:", nomePix, descricaoPix);
+
+  } catch (e) {
+    console.error("❌ Erro ao sincronizar máquina PIX:", e);
+  }
+}
+
+
+
+function arAutoPorNumero() {
+  const numEl = document.getElementById("arNum");
+  const estabEl = document.getElementById("arEstab");
+  const cliEl = document.getElementById("arCliente");
+
+  if (!numEl || !estabEl || !cliEl) return;
+
+  const num = (numEl.value || "").trim().toUpperCase();
+  numEl.value = num;
+
+  estabEl.value = "";
+  cliEl.value = "";
+
+  if (!num) return;
+
+  const m = (maquinas || []).find(x => String(x.numero || "").toUpperCase() === num);
+  if (!m) {
+    estabEl.value = "❌ MÁQUINA NÃO ENCONTRADA";
+    cliEl.value = "";
+    return;
+  }
+
+  estabEl.value = String(m.estab || "").toUpperCase();
+  cliEl.value = String(m.cliente || "").toUpperCase();
+}
+async function salvarRelogioAtualAdmin() {
+  if (!exigirAdmin()) return; // ✅ só ADMIN/MASTER
+
+  const num = (document.getElementById("arNum")?.value || "").trim().toUpperCase();
+
+  // ✅ inteiro (sem .00)
+  const rel = parseInt(document.getElementById("arRelogioAtual")?.value || "0", 10);
+
+  if (!num) return alert("❌ Digite o número da maquina.");
+  if (!Number.isFinite(rel) || rel <= 0) return alert("❌ Digite um relógio válido (maior que 0).");
+
+  const m = (maquinas || []).find(x => String(x.numero || "").toUpperCase() === num);
+  if (!m) return alert("❌ Máquina não encontrada.");
+
+  // anterior também como inteiro
+  const antes = m.ultimoRelogio != null ? parseInt(m.ultimoRelogio, 10) : 0;
+
+  // ✅ ADMIN pode diminuir ou aumentar (sem trava)
+
+  // ✅ salva como inteiro
+  m.ultimoRelogio = rel;
+
+  // ✅ IMPORTANTE: persistir e atualizar telas/contadores
+  if (typeof salvarNoFirebase === "function") salvarNoFirebase();
+
+  // ✅ se existir alguma função que atualiza a home/menu, chama
+  if (typeof atualizarMenu === "function") atualizarMenu();
+  if (typeof atualizarBotoesMenu === "function") atualizarBotoesMenu();
+  if (typeof renderAcertos === "function") renderAcertos();
+  if (typeof listarAcertos === "function") listarAcertos();
+  if (typeof atualizarAcerto === "function") atualizarAcerto();
+  if (typeof atualizarStatus === "function") atualizarStatus();
+
+  alert(`✅ Relógio atualizado.\nAnterior: ${antes}\nAtual: ${rel}`);
+}
+
+
+function exigirLogado() {
+  if (!isLogado()) {
+    alert("❌ Faça login primeiro.");
+    mostrarTelaLogin();
+    limparCamposLogin();
+    return false;
+  }
+  return true;
+}
+
+
+
+async function salvarAlteracoesMaquina() {
+  try {
+    const detNumero   = document.getElementById("detNumero");
+    const detEstab    = document.getElementById("detEstab");
+    const detCliente  = document.getElementById("detCliente");
+    const detEndereco = document.getElementById("detEndereco");
+    const detStatus   = document.getElementById("detStatus");
+    const detFone     = document.getElementById("detFone");
+    const detRota     = document.getElementById("detRota");
+
+    const detCpf = document.getElementById("detCpf");
+    const detRg  = document.getElementById("detRg");
+    const detPorcBase = document.getElementById("detPorcBase");
+    const erroCpfRg = document.getElementById("erroCpfRgDetalhe");
+
+    const numero = (detNumero?.value || "").trim().toUpperCase();
+
+    if (!numero) {
+      alert("❌ Informe o número da jukebox.");
+      detNumero?.focus();
+      return;
+    }
+
+    const m = (maquinas || []).find(x =>
+      String(x.numero || "").trim().toUpperCase() === numero
+    );
+
+    if (!m) {
+      alert("❌ Máquina não encontrada.");
+      return;
+    }
+
+    const status = detStatus?.value || "ALUGADA";
+
+    const ehDeposito = (typeof isDepositoStatus === "function")
+      ? isDepositoStatus(status)
+      : ["DEPOSITO", "DEPÓSITO"].includes(String(status || "").trim().toUpperCase());
+
+    const estab = (detEstab?.value || "").trim().toUpperCase();
+    const cliente = (detCliente?.value || "").trim().toUpperCase();
+    const enderecoTxt = (detEndereco?.value || "").trim().toUpperCase();
+    const foneTxt = (detFone?.value || "").trim();
+
+    const rota = ehDeposito
+      ? ""
+      : (detRota?.value || "").trim().toUpperCase();
+
+    const cpf = (detCpf?.value || "").trim();
+    const rg  = (detRg?.value || "").trim();
+    const pixMaquinaId = (detPixMaquinaId?.value || "").trim();
+
+    if (!ehDeposito) {
+      if (!cpf && !rg) {
+        if (erroCpfRg) erroCpfRg.style.display = "block";
+        alert("❌ Preencha CPF ou RG (pelo menos um).");
+        detCpf?.focus();
+        return;
+      } else {
+        if (erroCpfRg) erroCpfRg.style.display = "none";
+      }
+    } else {
+      if (erroCpfRg) erroCpfRg.style.display = "none";
+    }
+
+    let porcBase = Number(detPorcBase?.value || 0);
+    if (!Number.isFinite(porcBase)) porcBase = 0;
+    if (porcBase < 0) porcBase = 0;
+    if (porcBase > 100) porcBase = 100;
+
+    const nums = foneTxt.replace(/\D/g, "").slice(0, 11);
+    const ddd = nums.slice(0, 2);
+    const tel = nums.slice(2);
+
+    const statusAntes = String(m.status || "").trim().toUpperCase();
+
+m.status = (typeof normalizarStatus === "function")
+  ? normalizarStatus(status)
+  : String(status || "ALUGADA").trim().toUpperCase();
+
+const statusDepois = String(m.status || "").trim().toUpperCase();
+
+if (statusAntes.includes("DEP") && statusDepois === "ALUGADA") {
+  m.alugadaEm = new Date().toISOString();
+}
+
+    if (ehDeposito) {
+      m.estab = (typeof labelDeposito === "function")
+        ? labelDeposito()
+        : "DEPOSITO";
+
+      m.cliente = "";
+      m.endereco = "";
+      m.cpf = "";
+      m.rg = "";
+      m.porcBase = 0;
+      m.ddd = "";
+      m.tel = "";
+      m.foneFormatado = "";
+      m.rota = ""; // ✅ AQUI LIMPA A ROTA ANTIGA
+    } else {
+      m.estab = estab;
+      m.cliente = cliente;
+      m.endereco = enderecoTxt;
+      m.cpf = cpf;
+      m.rg = rg;
+      m.porcBase = porcBase;
+      m.ddd = ddd;
+      m.tel = tel;
+      m.foneFormatado = foneTxt;
+      m.rota = rota;
+      m.pixMaquinaId = pixMaquinaId;
+    }
+
+    const ok = await salvarNoFirebase(true);
+    if (!ok) return;
+
+    try { listarMaquinas(); } catch {}
+    try { atualizarStatus(); } catch {}
+    try { renderRotas(); } catch {}
+    try { preencherSelectRotas(); } catch {}
+    try { atualizarAlertaOcorrencias(); } catch {}
+
+    alert("✅ Alterações salvas com sucesso!");
+  } catch (e) {
+    console.error("Erro ao salvar alterações:", e);
+    alert("❌ Erro ao salvar alterações da máquina.");
+  }
+}
+
 
 
 function pedirSenhaAdmin() {
@@ -2155,8 +5123,6 @@ function abrirNoMaps(lat, lng) {
 
 
 
-
-
 function debugFirebase() {
   console.log("firebasePronto:", firebasePronto);
   console.log("maquinas.length:", (maquinas || []).length);
@@ -2166,9 +5132,6 @@ function debugFirebase() {
   alert(`FirebasePronto: ${firebasePronto}\nMáquinas: ${(maquinas||[]).length}\nUsuários: ${(usuarios||[]).length}`);
 }
 window.debugFirebase = debugFirebase;
-
-
-
 
 function pegarGPS() {
   return new Promise((resolve, reject) => {
@@ -2181,6 +5144,597 @@ function pegarGPS() {
     );
   });
 }
+
+function fmtBRL(v) {
+  return Number(v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
+function toDateLocal(dateInputValue, endOfDay=false){
+  // dateInputValue = "2026-01-14"
+  if (!dateInputValue) return null;
+  const [y,m,d] = dateInputValue.split("-").map(Number);
+  const dt = new Date(y, m-1, d, 0,0,0,0);
+  if (endOfDay) dt.setHours(23,59,59,999);
+  return dt;
+}
+
+
+
+// ✅ modo do fechamento (padrão DIARIO)
+let __fcModo = "DIARIO";
+
+// ✅ pega uma data-base (usa fcIni se tiver, senão hoje)
+function _fcDataBase() {
+  const iniEl = document.getElementById("fcIni");
+  if (iniEl && iniEl.value) return toDateLocal(iniEl.value, false);
+  return new Date();
+}
+
+// ✅ seta datas do dia (ini=fim no mesmo dia)
+function _fcSetDia(dt) {
+  const iniEl = document.getElementById("fcIni");
+  const fimEl = document.getElementById("fcFim");
+  if (!iniEl || !fimEl) return;
+
+  const yyyy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  const v = `${yyyy}-${mm}-${dd}`;
+
+  iniEl.value = v;
+  fimEl.value = v;
+}
+
+// ✅ seta datas do mês inteiro (01 até último dia)
+function _fcSetMes(dt) {
+  const iniEl = document.getElementById("fcIni");
+  const fimEl = document.getElementById("fcFim");
+  if (!iniEl || !fimEl) return;
+
+  const y = dt.getFullYear();
+  const m = dt.getMonth(); // 0-11
+
+  const first = new Date(y, m, 1);
+  const last  = new Date(y, m + 1, 0);
+
+  const f1 = `${first.getFullYear()}-${String(first.getMonth()+1).padStart(2,"0")}-${String(first.getDate()).padStart(2,"0")}`;
+  const f2 = `${last.getFullYear()}-${String(last.getMonth()+1).padStart(2,"0")}-${String(last.getDate()).padStart(2,"0")}`;
+
+  iniEl.value = f1;
+  fimEl.value = f2;
+}
+
+function fcSetModo(modo) {
+  _fcModo = (String(modo || "DIARIO").toUpperCase() === "MENSAL") ? "MENSAL" : "DIARIO";
+
+  if (_fcModo === "MENSAL") fcSetMensalAtual();
+  else fcSetDiarioHoje();
+
+  renderFechamentoCaixa();
+}
+
+
+function ligarEventosFechamentoCaixa() {
+  const tela = document.getElementById("fechamentoCaixa");
+  if (!tela) return;
+
+  const botoes = [...tela.querySelectorAll("button")];
+
+  const btnDiario = botoes.find(b => /di[aá]rio/i.test(b.textContent));
+  const btnMensal = botoes.find(b => /mensal/i.test(b.textContent));
+  const btnGerar  = botoes.find(b => /gerar/i.test(b.textContent));
+
+  if (btnDiario) btnDiario.onclick = () => { console.log("CLICK DIARIO"); fcSetModo("DIARIO"); };
+  if (btnMensal) btnMensal.onclick = () => { console.log("CLICK MENSAL"); fcSetModo("MENSAL"); };
+  if (btnGerar)  btnGerar.onclick  = () => { console.log("CLICK GERAR");  renderFechamentoCaixa(); };
+}
+
+
+
+function setPeriodoHojeFechamento() {
+  const ini = document.getElementById("fcIni");
+  const fim = document.getElementById("fcFim");
+  if (!ini || !fim) return;
+
+  const hoje = new Date();
+  const y = hoje.getFullYear();
+  const m = String(hoje.getMonth()+1).padStart(2,"0");
+  const d = String(hoje.getDate()).padStart(2,"0");
+  const s = `${y}-${m}-${d}`;
+
+  if (!ini.value) ini.value = s;
+  if (!fim.value) fim.value = s;
+}
+
+
+function keyDiaSP(dt) {
+  const d = new Date(dt);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+
+  const y = parts.find(p => p.type === "year").value;
+  const m = parts.find(p => p.type === "month").value;
+  const da = parts.find(p => p.type === "day").value;
+  return `${y}-${m}-${da}`; // yyyy-mm-dd
+}
+
+
+// ===============================
+// FECHAMENTO: EDITAR % DO CLIENTE
+// ===============================
+
+// admin check (você já usa body.is-admin / body.is-master)
+function fcIsAdmin() {
+  return document.body.classList.contains("is-admin") ||
+         document.body.classList.contains("is-master");
+}
+
+function fcMoney(v){
+  return Number(v||0).toLocaleString("pt-BR", { style:"currency", currency:"BRL" });
+}
+
+// chave do período (para não misturar um dia com outro)
+function fcPeriodoKey() {
+  const ini = document.getElementById("fcIni")?.value || "";
+  const fim = document.getElementById("fcFim")?.value || "";
+  const modo = String(window.__fcModo || window._fcModo || "DIARIO").toUpperCase();
+  return `${modo}|${ini}|${fim}`;
+}
+
+// storage de overrides: { "DIARIO|2026-02-12|2026-02-12": { "RECANTO DAS GOIANAS": 30 } }
+const FC_PCT_KEY = "fcPctOverride";
+
+function fcGetPctOverrides() {
+  try { return JSON.parse(localStorage.getItem(FC_PCT_KEY) || "{}"); }
+  catch { return {}; }
+}
+function fcSetPctOverrides(obj) {
+  localStorage.setItem(FC_PCT_KEY, JSON.stringify(obj || {}));
+}
+
+// estado do modal
+let __pctCtx = null; // { estab, total }
+
+
+function fcEnsureModalPct() {
+  if (document.getElementById("modalEditarPctFC")) return;
+
+  const wrap = document.createElement("div");
+  wrap.id = "modalEditarPctFC";
+  wrap.style.cssText = `
+    position:fixed; inset:0; display:none; align-items:center; justify-content:center;
+    background:rgba(0,0,0,.6); z-index:99999;
+  `;
+
+  wrap.innerHTML = `
+    <div style="width:min(520px,92vw); background:#0b1220; color:#fff; border-radius:16px; padding:16px;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <b>Editar % do cliente</b>
+        <button id="btnFecharModalPctFC">✖</button>
+      </div>
+
+      <div style="margin-top:10px;">
+        <div id="pctFcEstab"></div>
+        <div id="pctFcPeriodo"></div>
+        <div>Total empresa: <b id="pctFcTotal"></b></div>
+      </div>
+
+      <div style="margin-top:12px;">
+        <input id="pctFcNovo" type="number" min="0" max="100" step="0.01"
+               style="width:100%; padding:10px; border-radius:10px;" />
+      </div>
+
+      <div style="margin-top:16px; display:flex; gap:10px; justify-content:flex-end;">
+        <button id="btnCancelarModalPctFC">Cancelar</button>
+        <button id="btnSalvarModalPctFC">Salvar</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(wrap);
+
+  document.getElementById("btnFecharModalPctFC")?.addEventListener("click", fcFecharModalPct);
+  document.getElementById("btnCancelarModalPctFC")?.addEventListener("click", fcFecharModalPct);
+  document.getElementById("btnSalvarModalPctFC")?.addEventListener("click", fcSalvarPctModal);
+  document.getElementById("pctFcNovo")?.addEventListener("input", fcAtualizarPreviewPct);
+}
+
+
+
+function fcAbrirModalPct(estab, total){
+  fcEnsureModalPct();
+  console.log("fcAbrirModalPct()", { estab, total, isAdmin: fcIsAdmin() });
+
+  const m = document.getElementById("modalEditarPctFC");
+  console.log("modalEditarPctFC existe?", !!m, m);
+
+  console.log("ids:", {
+    pctFcEstab: !!document.getElementById("pctFcEstab"),
+    pctFcPeriodo: !!document.getElementById("pctFcPeriodo"),
+    pctFcTotal: !!document.getElementById("pctFcTotal"),
+    pctFcNovo: !!document.getElementById("pctFcNovo"),
+    btnSalvar: !!document.getElementById("btnSalvarModalPctFC"),
+    btnCancelar: !!document.getElementById("btnCancelarModalPctFC"),
+    btnFechar: !!document.getElementById("btnFecharModalPctFC"),
+  });
+
+  if (!fcIsAdmin()) return alert("Somente ADMIN pode editar.");
+
+  
+}
+
+function fcFecharModalPct(){
+  const m = document.getElementById("modalEditarPctFC");
+  if (m) m.style.display = "none";
+  __pctCtx = null;
+}
+
+function fcAtualizarPreviewPct(){
+  if (!__pctCtx) return;
+
+  const pct = Number(document.getElementById("pctFcNovo")?.value || 0);
+  const total = __pctCtx.total;
+
+  const repassar = Math.max(0, total * (pct/100));
+  const empresa = Math.max(0, total - repassar);
+  const recolher = empresa; // preview (no seu fechamento, recolher final é calculado no render)
+
+  document.getElementById("pctFcEmpresa").textContent = fcMoney(empresa);
+  document.getElementById("pctFcRepassar").textContent = fcMoney(repassar);
+  document.getElementById("pctFcRecolher").textContent = fcMoney(recolher);
+}
+
+function fcSalvarPctModal(){
+  if (!__pctCtx) return;
+
+  const pct = Number(document.getElementById("pctFcNovo")?.value || 0);
+  if (pct < 0 || pct > 100) {
+    alert("Percentual inválido (0 a 100).");
+    return;
+  }
+
+  const all = fcGetPctOverrides();
+  const key = fcPeriodoKey();
+  all[key] = all[key] || {};
+  all[key][__pctCtx.estab] = pct;
+
+  fcSetPctOverrides(all);
+
+  fcFecharModalPct();
+  renderFechamentoCaixa();
+  alert("✅ % do cliente atualizado nesse fechamento!");
+}
+
+// listeners (1 vez só)
+if (!window.__fcPctModalBind) {
+  window.__fcPctModalBind = true;
+
+  document.getElementById("btnFecharModalPctFC")?.addEventListener("click", fcFecharModalPct);
+  document.getElementById("btnCancelarModalPctFC")?.addEventListener("click", fcFecharModalPct);
+  document.getElementById("btnSalvarModalPctFC")?.addEventListener("click", fcSalvarPctModal);
+  document.getElementById("pctFcNovo")?.addEventListener("input", fcAtualizarPreviewPct);
+}
+
+// clique no botão ✏️ dentro de fcLista (delegação)
+// clique no botão ✏️ dentro de fcLista (delegação)
+function fcBindClickEditarPct() {
+  if (window.__fcEditPctBind) return;
+  window.__fcEditPctBind = true;
+
+  // CAPTURE = pega o click antes de qualquer stopPropagation()
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-editarpct]");
+    if (!btn) return;
+
+    // trava o click aqui
+    e.preventDefault();
+    e.stopPropagation();
+
+    const estab = btn.getAttribute("data-editarpct");
+    console.log("✅ CLICK Editar % capturado", estab);
+
+    if (!fcIsAdmin()) return alert("Somente ADMIN.");
+
+    const ini = document.getElementById("fcIni")?.value;
+    const fim = document.getElementById("fcFim")?.value;
+    const dtIni = toDateLocal(ini, false);
+    const dtFim = toDateLocal(fim, true);
+
+    let totalEstab = 0;
+
+    (acertos || []).forEach(a => {
+      const d = parseDataLocalSemTZ(a.data);
+      if (!d || d < dtIni || d > dtFim) return;
+
+      const nome =
+        a.estab || a.estabelecimento || a.nomeEstabelecimento || "Estabelecimento não informado";
+
+      if (nome !== estab) return;
+
+      // ✅ SOMA O TOTAL (RELÓGIO) — não usa a.empresa (porque muda com comissão)
+      const totalRel = Number(
+        a.totalRelogio ??
+        a.total ??
+        a.valorTotal ??
+        (Number(a.pix || 0) + Number(a.dinheiro || 0)) ??
+        a.empresa
+      ) || 0;
+
+      totalEstab += totalRel;
+    });
+
+    // abre modal com total correto
+    fcAbrirModalPct(estab, totalEstab);
+  }, true);
+}
+
+// ===============================
+// ✅ REGRA: SEM CENTAVOS (CLIENTE x EMPRESA)
+// - 0,00..0,49 -> "o real" fica pro CLIENTE  => comissão SOBE
+// - 0,50..0,99 -> "o real" fica pra EMPRESA => comissão DESCE
+// ===============================
+function arredondarComissaoClienteSemCentavos(valor) {
+  valor = Number(valor || 0);
+
+  const base = Math.floor(valor);
+  const cent = Math.round((valor - base) * 100); // 0..99 (blindado)
+
+  if (cent === 0) return base;
+  if (cent <= 49) return base + 1; // cliente ganha o real
+  return base;                     // empresa ganha o real
+}
+
+function splitSemCentavos(totalRel, comissaoRaw) {
+  const totalInt = Math.round(Number(totalRel || 0)); // total é inteiro
+  const comissaoInt = arredondarComissaoClienteSemCentavos(comissaoRaw);
+  const empresaInt = totalInt - comissaoInt;
+  return { totalInt, comissaoInt, empresaInt };
+}
+
+function fmtBRLInt(v) {
+  return "R$ " + Number(v || 0).toLocaleString("pt-BR", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0
+  });
+}
+
+
+
+function renderFechamentoCaixa() {
+  const tela = document.getElementById("fechamentoCaixa") || document;
+
+  let iniEl = document.getElementById("fcIni");
+  let fimEl = document.getElementById("fcFim");
+  let outResumo = document.getElementById("fcResumo");
+  let outLista  = document.getElementById("fcLista");
+
+  if (!iniEl || !fimEl) {
+    const dates = tela.querySelectorAll?.("input[type='date']") || [];
+    iniEl = iniEl || dates[0];
+    fimEl = fimEl || dates[1];
+  }
+
+  if (!outResumo) {
+    outResumo = document.createElement("div");
+    outResumo.id = "fcResumo";
+    tela.appendChild(outResumo);
+  }
+  if (!outLista) {
+    outLista = document.createElement("div");
+    outLista.id = "fcLista";
+    tela.appendChild(outLista);
+  }
+
+  if (!iniEl?.value || !fimEl?.value) {
+    outResumo.innerHTML = "❌ Selecione o período.";
+    outLista.innerHTML = "";
+    return;
+  }
+
+  try { fcBindClickEditarPct(); } catch {}
+
+  const dtIni = toDateLocal(iniEl.value, false);
+  const dtFim = toDateLocal(fimEl.value, true);
+
+  const lista = (acertos || []).filter(a => {
+    const d = parseDataLocalSemTZ(a.data);
+    return d && d >= dtIni && d <= dtFim;
+  });
+
+  if (!lista.length) {
+    outResumo.innerHTML = "✅ Nenhum acerto no período.";
+    outLista.innerHTML = "";
+    return;
+  }
+
+  const all = typeof fcGetPctOverrides === "function" ? fcGetPctOverrides() : {};
+  const pKey = typeof fcPeriodoKey === "function" ? fcPeriodoKey() : "";
+  const ovr = (all && pKey && all[pKey]) ? all[pKey] : {};
+
+  const grupo = new Map();
+
+  lista.forEach(a => {
+    const estab =
+      a.estab ||
+      a.estabelecimento ||
+      a.nomeEstabelecimento ||
+      "Estabelecimento não informado";
+
+    const totalRel = Number(
+      a.totalRelogio ??
+      a.total ??
+      (Number(a.pix || 0) + Number(a.dinheiro || 0))
+    ) || 0;
+
+    const pix = Number(a.pix || 0);
+    const especie = (a.dinheiro != null)
+      ? Number(a.dinheiro || 0)
+      : Math.max(0, totalRel - pix);
+
+    const clienteBase = Number(a.cliente || 0);
+
+    if (!grupo.has(estab)) {
+      grupo.set(estab, {
+        nome: estab,
+        qt: 0,
+        totalRel: 0,
+        pix: 0,
+        especie: 0,
+        clienteBase: 0
+      });
+    }
+
+    const g = grupo.get(estab);
+    g.qt++;
+    g.totalRel += totalRel;
+    g.pix += pix;
+    g.especie += especie;
+    g.clienteBase += clienteBase;
+  });
+
+  function fmtPct(v){
+    return Number(v||0).toLocaleString("pt-BR", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2
+    });
+  }
+
+  let T_totalRel = 0;
+  let T_pix = 0;
+  let T_especie = 0;
+  let T_cliente = 0;
+  let T_empresa = 0;
+
+  const modoMostrar = String(window.__fcModo || window._fcModo || "DIARIO").toUpperCase();
+  let html = `<h3 style="margin:10px 0 8px;">📍 Estabelecimentos</h3>`;
+
+  grupo.forEach(g => {
+
+    const totalRel = g.totalRel;
+    const pix = g.pix;
+    const especie = g.especie;
+
+    const pctBase = totalRel > 0 ? (g.clienteBase / totalRel) * 100 : 0;
+    const pctOverride = ovr[g.nome];
+    const temPctEditado = pctOverride != null && !isNaN(Number(pctOverride));
+    const pctUsado = temPctEditado ? Number(pctOverride) : pctBase;
+
+    const comissaoRaw = totalRel * (pctUsado / 100);
+const { totalInt, comissaoInt, empresaInt } = splitSemCentavos(totalRel, comissaoRaw);
+
+const pixInt = Math.round(pix);
+const especieInt = Math.round(especie);
+
+const saldoLiquido = empresaInt - pixInt;
+
+T_totalRel += totalInt;
+T_pix += pixInt;
+T_especie += especieInt;
+T_cliente += comissaoInt;
+T_empresa += empresaInt;
+
+
+    const btnEditar = (typeof fcIsAdmin === "function" && fcIsAdmin())
+      ? `<button type="button" data-editarpct="${g.nome}"
+          style="padding:10px 14px;border:none;border-radius:12px;background:#38bdf8;color:#0b1220;font-weight:900;cursor:pointer;">
+          ✏️ Editar %
+        </button>`
+      : "";
+
+    let saldoTexto = "";
+    if (saldoLiquido > 0) {
+      saldoTexto = `🪙 <b>A recolher (líquido):</b> ${fmtBRL(saldoLiquido)}`;
+    } else if (saldoLiquido < 0) {
+      saldoTexto = `🔁 <b>A repassar (líquido):</b> ${fmtBRL(Math.abs(saldoLiquido))}`;
+    } else {
+      saldoTexto = `✅ <b>Fechado (zerado)</b>`;
+    }
+
+    html += `
+      <div style="background:#111827;padding:12px;border-radius:12px;margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <b>${g.nome.toUpperCase()}</b>
+          ${btnEditar}
+        </div>
+
+        <div style="margin-top:6px;">✅ ${g.qt} acerto(s)</div>
+
+        <div style="margin-top:10px;line-height:1.6;">
+         ⏱️ <b>Total (Relógio):</b> ${fmtBRLInt(totalInt)}<br>
+💳 <b>PIX:</b> ${fmtBRLInt(pixInt)}<br>
+💵 <b>Espécie:</b> ${fmtBRLInt(especieInt)}<br><br>
+
+👤 <b>Cliente (Comissão):</b> ${fmtBRLInt(comissaoInt)}
+<small style="opacity:.8;">(${fmtPct(pctUsado)}%)</small><br>
+
+🏢 <b>Empresa (Direito após comissão):</b> ${fmtBRLInt(empresaInt)}<br><br>
+
+          <div style="padding:10px;border-radius:12px;background:#0f172a;">
+            ${saldoTexto}
+          </div>
+
+          ${temPctEditado ? `<div style="margin-top:6px;font-size:12px;opacity:.7;">% editado no fechamento: <b>${fmtPct(pctOverride)}%</b></div>` : ""}
+        </div>
+      </div>
+    `;
+  });
+
+  const saldoLiquidoGeral = T_empresa - T_pix;
+
+  let saldoTopo = "";
+  if (saldoLiquidoGeral > 0) {
+    saldoTopo = `🪙 <b>A recolher (líquido):</b> ${fmtBRL(saldoLiquidoGeral)}`;
+  } else if (saldoLiquidoGeral < 0) {
+    saldoTopo = `🔁 <b>A repassar (líquido):</b> ${fmtBRL(Math.abs(saldoLiquidoGeral))}`;
+  } else {
+    saldoTopo = `✅ <b>Fechado (zerado)</b>`;
+  }
+
+  outResumo.innerHTML = `
+    <div style="background:#0f172a;padding:12px;border-radius:12px;line-height:1.6;">
+      <div style="text-align:center;font-weight:900;">Modo: ${modoMostrar}</div>
+      <div style="text-align:center;">Período: ${iniEl.value.split("-").reverse().join("/")} até ${fimEl.value.split("-").reverse().join("/")}</div>
+
+      <hr style="opacity:.2;margin:10px 0;">
+
+      ⏱️ <b>Total (Relógio):</b> ${fmtBRL(T_totalRel)}<br>
+      💳 <b>Total PIX:</b> ${fmtBRL(T_pix)}<br>
+      💵 <b>Total Espécie:</b> ${fmtBRL(T_especie)}<br><br>
+
+      👤 <b>Total Comissão (Clientes):</b> ${fmtBRL(T_cliente)}<br>
+      🏢 <b>Total Empresa (Direito após comissão):</b> ${fmtBRL(T_empresa)}<br><br>
+
+      <div style="padding:10px;border-radius:12px;background:#111827;">
+        ${saldoTopo}
+      </div>
+
+      <div style="margin-top:10px;">✅ <b>Qtd acertos:</b> ${lista.length}</div>
+    </div>
+  `;
+
+  outLista.innerHTML = html;
+}
+
+
+// ===============================
+// REGRA DE ARREDONDAMENTO EMPRESA
+// ===============================
+function arredondarEmpresa(valor) {
+  const inteiro = Math.floor(valor);
+  const decimal = Math.round((valor - inteiro) * 100);
+
+  if (decimal <= 49) {
+    return inteiro;
+  } else {
+    return inteiro + 1;
+  }
+}
+
+
 
 function toNumberCoord(v) {
   if (v === null || v === undefined) return null;
@@ -2254,45 +5808,254 @@ async function pegarLocalizacaoCadastro() {
   }
 }
 
+
+// =====================
+// 📍 GPS PRECISO (High Accuracy + estabilização)
+// =====================
+function obterLocalizacaoPrecisa({
+  maxAccuracy = 10,
+  timeoutMs = 15000,
+  maxAgeMs = 0,
+  debug = false
+} = {}) {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      return reject(new Error("Geolocalização não suportada neste navegador."));
+    }
+
+    const inicio = Date.now();
+    let melhor = null;
+
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        const { latitude, longitude, accuracy } = pos.coords;
+
+        if (!melhor || accuracy < melhor.accuracy) {
+          melhor = { latitude, longitude, accuracy, pos };
+          if (debug) console.log("📍 GPS update:", accuracy.toFixed(1) + "m", latitude, longitude);
+        }
+
+        if (accuracy <= maxAccuracy) {
+          navigator.geolocation.clearWatch(watchId);
+          return resolve({ ...melhor, ok: true });
+        }
+
+        if (Date.now() - inicio >= timeoutMs) {
+          navigator.geolocation.clearWatch(watchId);
+          if (!melhor) return reject(new Error("Não conseguiu obter localização."));
+          return resolve({ ...melhor, ok: false, warning: "Não atingiu a precisão desejada." });
+        }
+      },
+      (err) => {
+        navigator.geolocation.clearWatch(watchId);
+        reject(err);
+      },
+      { enableHighAccuracy: true, timeout: timeoutMs, maximumAge: maxAgeMs }
+    );
+  });
+}
+
+
+function setTextoLocalizacaoUI({ lat, lng, accuracy }) {
+  const texto = `LAT:${Number(lat).toFixed(6)} | LNG:${Number(lng).toFixed(6)} | ±${Number(accuracy ?? 0).toFixed(1)}m`;
+
+  // ✅ seu campo REAL do detalhe
+  const det = document.getElementById("detEndereco");
+  if (det) {
+    det.value = texto;
+    return;
+  }
+
+  // ✅ sua aba de localização (se tiver um lugar pra mostrar)
+  const localP = document.getElementById("local");
+  if (localP) {
+    localP.textContent = texto;
+    return;
+  }
+
+  // se não tiver tela aberta, não faz nada (sem warning)
+}
+
+
+// =====================
+// 📍 BUSCAR LOCALIZAÇÃO (GPS) — COMPLETA
+// - pega GPS "mais preciso possível" (watchPosition)
+// - escreve no campo da UI (detEndereco / local / localizacaoTexto)
+// - salva na máquina selecionada
+// - BLOQUEIA salvar se accuracy estiver ruim (ajuste o limite)
+// =====================
+async function buscarLocalizacaoGPS({
+  maxAccuracy = 10,        // alvo: quando atingir <= isso, para e retorna
+  timeoutMs = 20000,       // espera até 20s
+  naoSalvarAcimaDe = 25,   // ✅ NÃO salva se accuracy > 25m (ajuste: 15/10/5)
+  debug = true
+} = {}) {
+  try {
+    // (1) pega a melhor localização possível
+    const r = await obterLocalizacaoPrecisa({
+      maxAccuracy,
+      timeoutMs,
+      maxAgeMs: 0,
+      debug
+    });
+
+    // (2) texto padrão
+    const texto = `LAT:${Number(r.latitude).toFixed(6)} | LNG:${Number(r.longitude).toFixed(6)} | ±${Number(r.accuracy).toFixed(1)}m`;
+
+    // (3) atualiza UI (sem warnings)
+    // prioridade: tela detalhe
+    const det = document.getElementById("detEndereco");
+    if (det) det.value = texto;
+
+    // fallback: algum lugar na aba de localização
+    const localP = document.getElementById("local");
+    if (!det && localP) localP.textContent = texto;
+
+    // fallback extra (se você tiver algum desses IDs)
+    const elExtra =
+      document.getElementById("localizacaoTexto") ||
+      document.getElementById("txtLocalizacao") ||
+      document.getElementById("enderecoLocalizacao") ||
+      document.querySelector("[data-localizacao]");
+    if (!det && !localP && elExtra) {
+      if ("value" in elExtra) elExtra.value = texto;
+      else elExtra.textContent = texto;
+    }
+
+    // (4) define qual máquina salvar:
+    // 1º: maquinaSelecionadaNumero (se você usa isso)
+    // 2º: detNumero (tela detalhe)
+    // 3º: locNum (aba localização)
+    const numSel = String(
+      window.maquinaSelecionadaNumero ||
+      document.getElementById("detNumero")?.value ||
+      document.getElementById("locNum")?.value ||
+      ""
+    ).trim().toUpperCase();
+
+    if (!numSel) {
+      alert(
+        (r.ok ? "✅ GPS OK!" : "⚠️ GPS OK, mas não ficou ideal.") +
+        `\n\n${texto}`
+      );
+      return r;
+    }
+
+    const m = (window.maquinas || maquinas || []).find(x =>
+      String(x.numero || "").trim().toUpperCase() === numSel
+    );
+
+    if (!m) {
+      alert("⚠️ Peguei o GPS, mas não achei a máquina para salvar (JB " + numSel + ").");
+      return r;
+    }
+
+    // (5) trava: não salva se estiver muito impreciso
+    if (Number(r.accuracy) > Number(naoSalvarAcimaDe)) {
+      alert(
+        `❌ GPS ainda impreciso (±${Number(r.accuracy).toFixed(1)}m).\n\n` +
+        `Não vou salvar pra não gravar ponto errado.\n\n` +
+        `✅ Dica: teste no celular com "Localização precisa" ligada.\n\n` +
+        `${texto}`
+      );
+      return r;
+    }
+
+    // (6) salva na máquina
+    m.lat = r.latitude;
+    m.lng = r.longitude;
+    m.gpsAccuracy = r.accuracy;
+    m.gpsUpdatedAt = new Date().toISOString();
+    m.endereco = texto; // opcional (você já usa)
+
+    // (7) persiste
+    await salvarNoFirebase(true);
+
+    try { listarMaquinas(); } catch {}
+    try { atualizarStatus(); } catch {}
+
+    alert(
+      (r.ok ? "✅ GPS SALVO com boa precisão!" : "⚠️ GPS SALVO, mas não ficou ideal.") +
+      `\n\n${texto}`
+    );
+
+    return r;
+
+  } catch (e) {
+    console.error("buscarLocalizacaoGPS erro:", e);
+
+    const msg = String(e?.message || e);
+
+    if (msg.toLowerCase().includes("permission")) {
+      alert("❌ Permissão de localização negada.");
+      return null;
+    }
+    if (msg.includes("Only secure origins") || msg.toLowerCase().includes("secure")) {
+      alert("❌ GPS precisa rodar em HTTPS (ou localhost).");
+      return null;
+    }
+
+    alert("❌ Não consegui obter o GPS.\n\n" + msg);
+    return null;
+  }
+}
+
+window.buscarLocalizacaoGPS = buscarLocalizacaoGPS;
+
+
+
 // --- DETALHE: pega GPS e salva direto na máquina (ADMIN) ---
+// ✅ versão precisa (espera estabilizar)
 async function atualizarLocalizacaoDetalhe() {
   const numero = (document.getElementById("detNumero")?.value || "").trim().toUpperCase();
   if (!numero) return alert("❌ Selecione o número da máquina.");
 
-  const m = maquinas.find(x => String(x.numero).toUpperCase() === numero);
+  const m = maquinas.find(x => String(x.numero || "").toUpperCase() === numero);
   if (!m) return alert("❌ Máquina não encontrada.");
 
-  if (!navigator.geolocation) {
-    alert("❌ GPS não suportado neste dispositivo/navegador.");
-    return;
+  try {
+    const r = await obterLocalizacaoPrecisa({
+      maxAccuracy: 10,   // tente 10. se quiser forçar: 5 (vai falhar mais)
+      timeoutMs: 20000,  // 20s ajuda a estabilizar
+      maxAgeMs: 0,
+      debug: true
+    });
+
+    const lat = r.latitude;
+    const lng = r.longitude;
+
+    // ✅ salva no padrão do seu sistema
+    m.lat = lat;
+    m.lng = lng;
+    m.gpsAccuracy = r.accuracy;
+    m.gpsUpdatedAt = new Date().toISOString();
+
+    const texto = `LAT:${lat.toFixed(6)} | LNG:${lng.toFixed(6)} | ±${r.accuracy.toFixed(1)}m`;
+
+    const campo = document.getElementById("detEndereco");
+    if (campo) campo.value = texto;
+
+    // opcional manter também em endereco
+    m.endereco = texto;
+
+    await salvarNoFirebase(true);
+
+    try { listarMaquinas(); } catch {}
+    try { atualizarStatus(); } catch {}
+
+    alert(
+      (r.ok ? "✅ Localização atualizada com boa precisão!" : "⚠️ Localização salva, mas precisão não ficou ideal.") +
+      `\n\nPrecisão: ${r.accuracy.toFixed(1)}m`
+    );
+
+  } catch (err) {
+    console.error("atualizarLocalizacaoDetalhe erro:", err);
+    alert("❌ Não consegui pegar o GPS.\n\n" + (err?.message || err));
   }
-
-  navigator.geolocation.getCurrentPosition(
-    (pos) => {
-      const lat = pos.coords.latitude;
-      const lng = pos.coords.longitude;
-
-      // ✅ salva do jeito que seu sistema usa
-      m.lat = lat;
-      m.lng = lng;
-
-      const texto = `LAT:${lat.toFixed(6)} | LNG:${lng.toFixed(6)}`;
-
-      const campo = document.getElementById("detEndereco");
-      if (campo) campo.value = texto;
-
-      // (opcional) manter também em endereco
-      m.endereco = texto;
-
-      salvarNoFirebase();
-      alert("✅ Localização atualizada!");
-    },
-    (err) => {
-      alert("❌ Não consegui pegar o GPS. Autorize a localização no navegador.\n\n" + err.message);
-    },
-    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-  );
 }
+window.atualizarLocalizacaoDetalhe = atualizarLocalizacaoDetalhe;
+
+
 
 // --- ABA LOCALIZAÇÃO: auto preencher ---
 function autoLocalPorNumero() {
@@ -2465,6 +6228,15 @@ function salvarOcorrencia() {
     data: new Date().toISOString(),
   });
 
+
+  function isoLocalAgora() {
+  const now = new Date();
+  // ajusta para horário local e remove o "Z" (UTC)
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60000)
+    .toISOString()
+    .slice(0, 19); // "YYYY-MM-DDTHH:mm:ss"
+}
+  
   salvarNoFirebase();
 
     const msg =
@@ -2485,70 +6257,54 @@ function salvarOcorrencia() {
   alert("✅ Ocorrência salva!");
 }
 
+
+
 function listarOcorrencias() {
-  const ul = document.getElementById("listaOcorrencias");
-  if (!ul) return;
+  const tela = document.getElementById("ocorrencias") || document;
+
+  let ul = document.getElementById("listaOcorrencias");
+  if (!ul) ul = tela.querySelector?.("[data-oc-lista]") || null;
+
+  if (!ul) {
+    console.error("❌ listarOcorrencias: não achei o UL da lista.", {
+      temTelaOc: !!document.getElementById("ocorrencias"),
+      idsPossiveis: ["#listaOcorrencias", "[data-oc-lista]"]
+    });
+    return;
+  }
 
   ul.innerHTML = "";
 
-  if (!ocorrencias.length) {
+  const lista = Array.isArray(ocorrencias) ? ocorrencias : [];
+
+  if (!lista.length) {
     ul.innerHTML = "<li>✅ Nenhuma ocorrência pendente</li>";
     return;
   }
 
-  // mais recentes primeiro
-  const ordenadas = [...ocorrencias].sort((a, b) => new Date(b.data) - new Date(a.data));
+  const ordenadas = [...lista].sort((a, b) => new Date(b.data) - new Date(a.data));
 
   ordenadas.forEach((o) => {
     const d = new Date(o.data);
     const li = document.createElement("li");
 
-    // pega a máquina pelo número da ocorrência
-    const m = maquinas.find(x =>
+    const m = (maquinas || []).find(x =>
       String(x.numero).toUpperCase() === String(o.numero).toUpperCase()
     );
 
-    // lat/lng seguros
     const lat = m ? toNumberCoord(m.lat) : null;
     const lng = m ? toNumberCoord(m.lng) : null;
     const temGPS = (lat !== null && lng !== null);
 
-    // botão localização (✅ agora correto)
     const btnLocal = temGPS
       ? `
-        <button type="button"
-          style="
-            margin-top:10px;
-            width:100%;
-            padding:14px 12px;
-            border:none;
-            border-radius:12px;
-            background:#38bdf8;
-            color:#0b1220;
-            font-weight:800;
-            font-size:16px;
-            line-height:1;
-            text-align:center;
-          "
+        <button type="button" style="margin-top:10px;width:100%;padding:14px 12px;border:none;border-radius:12px;background:#38bdf8;color:#0b1220;font-weight:800;font-size:16px;line-height:1;text-align:center;"
           onclick="abrirNoMaps('${lat}', '${lng}')">
           📍 Abrir Localização
         </button>
       `
       : `
-        <button type="button"
-          style="
-            margin-top:10px;
-            width:100%;
-            padding:14px 12px;
-            border:none;
-            border-radius:12px;
-            background:#38bdf8;
-            color:#0b1220;
-            font-weight:800;
-            font-size:16px;
-            line-height:1;
-            text-align:center;
-          "
+        <button type="button" style="margin-top:10px;width:100%;padding:14px 12px;border:none;border-radius:12px;background:#38bdf8;color:#0b1220;font-weight:800;font-size:16px;line-height:1;text-align:center;"
           onclick="alert('❌ Essa máquina ainda não tem GPS salvo. Vá em Máquinas Cadastradas e clique em Buscar Localização (GPS).')">
           📍 Abrir Localização
         </button>
@@ -2564,23 +6320,9 @@ function listarOcorrencias() {
       <span style="opacity:.85;">${d.toLocaleDateString()} ${d.toLocaleTimeString()}</span><br><br>
       <div style="white-space:pre-wrap; opacity:.95;">${o.obs}</div>
       <br>
-
       ${btnLocal}
-
       <button type="button"
-        style="
-          margin-top:10px;
-          width:100%;
-          padding:14px 12px;
-          border:none;
-          border-radius:12px;
-          background:#22c55e;
-          color:#0b1220;
-          font-weight:800;
-          font-size:16px;
-          line-height:1;
-          text-align:center;
-        "
+        style="margin-top:10px;width:100%;padding:14px 12px;border:none;border-radius:12px;background:#22c55e;color:#0b1220;font-weight:800;font-size:16px;line-height:1;text-align:center;"
         onclick="concluirOcorrencia(${o.id})">
         ✅ Concluído
       </button>
@@ -2589,6 +6331,20 @@ function listarOcorrencias() {
     ul.appendChild(li);
   });
 }
+window.listarOcorrencias = listarOcorrencias;
+
+
+function abrirOcorrencias() {
+  if (!exigirAdmin()) return;
+  abrir("ocorrencias");
+  setTimeout(() => {
+    listarOcorrencias();
+    atualizarAlertaOcorrencias();
+  }, 0);
+}
+window.abrirOcorrencias = abrirOcorrencias;
+
+
 
 function concluirOcorrencia(id) {
   const ok = confirm("Marcar como concluído e remover do sistema?");
@@ -2757,6 +6513,95 @@ function formatBR(d) {
 
 function pad2(n) { return String(n).padStart(2, "0"); }
 
+// ====== CONFIG ======
+const STORAGE_KEY = "maquinas"; // onde fica a lista de máquinas salvas
+
+// Normaliza o número: tira espaços e padroniza
+function normalizarNumero(num) {
+  return String(num || "").trim();
+}
+
+
+function maquinaExiste(numero) {
+  const num = String(numero || "").trim().toUpperCase();
+
+  return Array.isArray(maquinas) &&
+    maquinas.some(m =>
+      String(m?.numero || "").trim().toUpperCase() === num
+    );
+}
+
+// ✅ 1) Verifica quando você sai do campo (onblur)
+function verificarNumeroMaquina() {
+  const numero = normalizarNumero(document.getElementById("numMaquina").value);
+
+  if (!numero) return; // não faz nada se estiver vazio
+
+  if (maquinaExiste(numero)) {
+    alert("❌ Já existe uma máquina cadastrada com esse número!");
+    document.getElementById("numMaquina").focus();
+    document.getElementById("numMaquina").select();
+  } else {
+    // opcional: pode mostrar uma confirmação silenciosa
+    // console.log("Número disponível:", numero);
+  }
+}
+
+// ✅ 2) Salva e vai para Depósito (recadastro)
+function salvarCadastroMaquina() {
+  const numero = normalizarNumero(document.getElementById("numMaquina").value);
+
+  if (!numero) {
+    alert("Digite o número da máquina.");
+    document.getElementById("numMaquina").focus();
+    return;
+  }
+
+  // bloqueia duplicado
+  if (maquinaExiste(numero)) {
+    alert("❌ Esse número já está cadastrado. Use outro.");
+    document.getElementById("numMaquina").focus();
+    document.getElementById("numMaquina").select();
+    return;
+  }
+
+  // cria registro mínimo
+  const maquinas = carregarMaquinas();
+
+  const novaMaquina = {
+    numero: numero,
+    criadoEm: new Date().toISOString(),
+    status: "deposito" // já marca como indo pro depósito
+  };
+
+  maquinas.push(novaMaquina);
+  salvarMaquinas(maquinas);
+
+  // (opcional) guardar qual máquina ficou "selecionada" pro recadastro
+  localStorage.setItem("maquinaSelecionada", numero);
+
+  alert("✅ Máquina salva! Indo para Depósito...");
+
+  // ir direto pro Depósito
+  abrirDeposito();
+}
+
+// ✅ 3) Função pra trocar de tela/aba/box pro Depósito
+function abrirDeposito() {
+  // EXEMPLO: se você usa divs com class "escondido"
+  // ajuste os IDs conforme o seu site
+
+  const telaCadastro = document.getElementById("cadastro");
+  const telaDeposito = document.getElementById("deposito"); // <--- seu ID do depósito
+
+  if (telaCadastro) telaCadastro.classList.add("escondido");
+  if (telaDeposito) telaDeposito.classList.remove("escondido");
+
+  // se você tiver título/rotina ao abrir o depósito, pode chamar aqui também:
+  // carregarTelaDeposito();
+}
+
+
 function setPeriodoMesAtual() {
   const ini = document.getElementById("histIni");
   const fim = document.getElementById("histFim");
@@ -2851,37 +6696,160 @@ function limparHistoricoVendas() {
   }
 }
 
+async function fazerLogin(e) {
+  e?.preventDefault?.();
 
+  console.log("1) clique login");
+  mostrarLoading(true);
 
+  try {
+    console.log("2) antes do signIn");
+    // AQUI seu signIn (email/senha ou anon)
+    // await signInWithEmailAndPassword(auth, email, senha);
+    // OU await signInAnonymously(auth);
 
-// Função para fazer login
-function fazerLogin() {
-  const tipo = document.getElementById("tipoLogin")?.value || "ADMIN";
-  // usa o login certo (Firebase)
-  entrarLogin(tipo);
+    console.log("3) depois do signIn ✅");
+
+    console.log("4) antes de carregar empresas");
+    await carregarEmpresas(); // ou a função que busca Firestore
+    console.log("5) depois de carregar empresas ✅");
+
+  } catch (err) {
+    console.error("ERRO no login:", err);
+    alert(err?.message || err);
+  } finally {
+    console.log("6) finally -> desliga loading");
+    mostrarLoading(false);
+  }
 }
-window.fazerLogin = fazerLogin;
 
 
 
 function pubOcAutoPorNumero() {
-  const num = (document.getElementById("pubOcNum")?.value || "").trim();
-  const estab = document.getElementById("pubOcEstab");
+  const numEl = document.getElementById("pubOcNum");
+  const estabEl = document.getElementById("pubOcEstab");
 
-  if (!estab) return;
+  const num = (numEl?.value || "").trim().toUpperCase();
+  if (numEl) numEl.value = num;
 
   if (!num) {
-    estab.value = "";
+    if (estabEl) estabEl.value = "";
     return;
   }
 
-  // Por enquanto só deixa o campo pronto (sem auto-preencher)
-  // Depois a gente liga isso com Firestore pra buscar pelo número.
-}
+  const lista = Array.isArray(window.pubMaquinas) ? window.pubMaquinas : [];
 
-// ✅ MUITO IMPORTANTE (porque seu script é type="module")
+  const m = lista.find(x => String(x.numero || "").trim().toUpperCase() === num);
+
+  if (m) {
+    if (estabEl) estabEl.value = String(m.estab || "").toUpperCase();
+  } else {
+    if (estabEl) estabEl.value = "❌ MÁQUINA NÃO ENCONTRADA";
+  }
+}
 window.pubOcAutoPorNumero = pubOcAutoPorNumero;
 
+
+window.pubMaquinas = [];
+
+window.pubMaquinas = [];
+
+async function carregarMaquinasPublicasDaEmpresa(empId) {
+  // ✅ NORMALIZA O ID (MINI MICRO -> MINI-MICRO)
+  empId = normalizarEmpId(empId);
+  window.pubMaquinas = [];
+
+  if (!empId) return [];
+
+  try {
+    await ensureAuth();
+
+    const refApp = doc(db, "empresas", empId, "dados", "app");
+    const snap = await getDoc(refApp);
+
+    if (!snap.exists()) {
+      console.warn("⚠️ /empresas/" + empId + "/dados/app NÃO existe");
+      return [];
+    }
+
+    const data = snap.data() || {};
+    console.log("📦 dados/app keys:", Object.keys(data));
+    console.log("🏢 empId público (normalizado):", empId);
+
+    // pega "maquinas" (array ou objeto)
+    let raw = data.maquinas ?? null;
+    let lista = [];
+
+    if (Array.isArray(raw)) {
+      lista = raw;
+      console.log("✅ maquinas veio como ARRAY:", lista.length);
+    } else if (raw && typeof raw === "object") {
+      lista = Object.entries(raw).map(([k, v]) => ({ id: k, ...(v || {}) }));
+      console.log("✅ maquinas veio como OBJETO/MAPA:", lista.length);
+    } else {
+      console.warn("⚠️ máquinas existe mas não é array nem objeto.");
+      lista = [];
+    }
+
+    window.pubMaquinas = lista;
+
+    console.log("✅ Máquinas públicas carregadas:", empId, lista.length);
+    console.log("🔎 Exemplo 1ª máquina:", window.pubMaquinas[0]);
+
+    return lista;
+  } catch (e) {
+    console.error("❌ carregarMaquinasPublicasDaEmpresa:", e);
+    window.pubMaquinas = [];
+    return [];
+  }
+}
+window.carregarMaquinasPublicasDaEmpresa = carregarMaquinasPublicasDaEmpresa;
+
+
+async function onPubEmpresaChange() {
+  const sel = document.getElementById("pubOcEmpresa");
+  const numEl = document.getElementById("pubOcNum");
+  const estabEl = document.getElementById("pubOcEstab");
+
+  const empId = String(sel?.value || "").trim().toUpperCase();
+
+  if (numEl) numEl.disabled = !empId;
+
+  if (estabEl) estabEl.value = "";
+  if (numEl) numEl.value = "";
+
+  if (!empId) {
+    window.pubMaquinas = [];
+    return;
+  }
+
+  await carregarMaquinasPublicasDaEmpresa(empId);
+}
+window.onPubEmpresaChange = onPubEmpresaChange;
+
+
+window.addEventListener("DOMContentLoaded", async () => {
+  try {
+    // carrega lista de empresas públicas no select
+    await carregarEmpresasPublicasFirestore();
+  } catch (e) {
+    console.warn("❌ erro carregar empresas públicas", e);
+  }
+
+  try {
+    ligarEventosOcorrenciaPublica();
+  } catch (e) {
+    console.warn("❌ erro ligar eventos públicos", e);
+  }
+
+  // se já tiver empresa selecionada (cache / reload)
+  const sel = document.getElementById("pubOcEmpresa");
+  if (sel && sel.value) {
+    try {
+      await carregarMaquinasPublicasDaEmpresa(sel.value);
+    } catch {}
+  }
+});
 
 
 function limparCamposLogin() {
@@ -3146,9 +7114,6 @@ function pedirCredenciaisAdmin() {
 }
 
 
-
-
-
 function validarCredenciaisAdmin({ user, senha }) {
   user = String(user || "").trim().toLowerCase();
   senha = String(senha || "").trim();
@@ -3187,8 +7152,10 @@ function validarCredenciaisAdmin({ user, senha }) {
 
 
 async function trocarSenhaAdmin() {
-  window.trocarSenhaAdmin = trocarSenhaAdmin;
-  if (!exigirAdmin()) return; // ✅ pronto, sem pedir senha
+  if (!exigirAdmin()) return;
+
+  const empId = String(empresaAtualId || "").trim().toUpperCase();
+  if (!empId) return alert("❌ Empresa atual não definida.");
 
   const nova = prompt("Digite a NOVA senha do ADMIN (mínimo 4 caracteres):");
   if (nova === null) return;
@@ -3204,50 +7171,98 @@ async function trocarSenhaAdmin() {
     return;
   }
 
-  const admin = (usuarios || []).find(u => String(u.tipo || "").toUpperCase() === "ADMIN");
-  if (!admin) return alert("❌ Admin não encontrado.");
+  // ✅ pega o ADMIN da empresa atual
+  const admin = (usuarios || []).find(u =>
+    String(u.tipo || "").toUpperCase() === "ADMIN" &&
+    String(u.empresaId || "").toUpperCase() === empId
+  );
+  if (!admin) return alert("❌ Admin não encontrado nessa empresa.");
 
   admin.senha = novaLimpa;
-  salvarNoFirebase();
+
+  // ✅ salva no doc da empresa
+  await salvarNoFirebase(true);
+
+  // ✅ ATUALIZA O ÍNDICE CENTRAL E FORÇA TROCA DE SENHA (senão não muda!)
+  await salvarLoginIndex({
+    user: admin.user,
+    tipo: "ADMIN",
+    empresaId: empId,
+    senha: admin.senha,
+    forceSenha: true
+  });
 
   alert("✅ Senha do ADMIN alterada com sucesso!");
 }
+window.trocarSenhaAdmin = trocarSenhaAdmin;
 
 
 async function trocarCredenciaisAdmin() {
-  window.trocarCredenciaisAdmin = trocarCredenciaisAdmin;
-  if (!exigirAdmin()) return; // ✅ sem pedir senha extra
+  if (!exigirMaster()) return;
 
-  const novoUser = prompt("Digite o NOVO usuário do ADMIN (ex: admin2):");
+  const empId = String(empresaAtualId || "").trim().toUpperCase();
+  if (!empId) return alert("❌ Empresa atual não definida.");
+
+  const nome = prompt("Digite o NOME do novo ADMIN:");
+  if (nome === null) return;
+  const nomeLimpo = String(nome).trim().toUpperCase();
+  if (!nomeLimpo) return alert("❌ Nome não pode ficar vazio.");
+
+  const novoUser = prompt("Digite o USUÁRIO do novo ADMIN (ex: admin_empresa):");
   if (novoUser === null) return;
+  const userLimpo = String(novoUser).trim().toLowerCase();
+  if (!userLimpo) return alert("❌ Usuário não pode ficar vazio.");
 
-  const novoUserLimpo = String(novoUser).trim().toLowerCase();
-  if (!novoUserLimpo) return alert("❌ Usuário não pode ficar vazio.");
-
-  const novaSenha = prompt("Digite a NOVA senha do ADMIN (mínimo 4 caracteres):");
+  const novaSenha = prompt("Digite a SENHA do novo ADMIN (mínimo 4 caracteres):");
   if (novaSenha === null) return;
+  const senhaLimpa = String(novaSenha).trim();
+  if (senhaLimpa.length < 4) return alert("❌ Senha muito curta.");
 
-  const novaSenhaLimpa = String(novaSenha).trim();
-  if (novaSenhaLimpa.length < 4) return alert("❌ Senha muito curta.");
-
-  const confirma = prompt("Confirme a NOVA senha do ADMIN:");
+  const confirma = prompt("Confirme a SENHA do novo ADMIN:");
   if (confirma === null) return;
+  if (String(confirma).trim() !== senhaLimpa) return alert("❌ Confirmação não bate.");
 
-  if (String(confirma).trim() !== novaSenhaLimpa) {
-    alert("❌ Confirmação não bate.");
-    return;
+  const idx = (usuarios || []).findIndex(u =>
+    String(u.tipo || "").toUpperCase() === "ADMIN" &&
+    String(u.empresaId || "").toUpperCase() === empId
+  );
+  if (idx === -1) return alert("❌ ADMIN não encontrado nessa empresa.");
+
+  // guarda user antigo pra remover do índice depois
+  const userAntigo = String(usuarios[idx].user || "").trim().toLowerCase();
+
+  // impede duplicado no array da empresa
+  const duplicado = (usuarios || []).some((u, i) =>
+    i !== idx && String(u.user || "").toLowerCase() === userLimpo
+  );
+  if (duplicado) return alert("❌ Já existe outro usuário com esse login nessa empresa.");
+
+  usuarios[idx].nome = nomeLimpo;
+  usuarios[idx].user = userLimpo;
+  usuarios[idx].senha = senhaLimpa;
+  usuarios[idx].empresaId = empId;
+  usuarios[idx].tipo = "ADMIN";
+
+  await salvarNoFirebase(true);
+
+  // cria/atualiza login novo e FORÇA senha
+  await salvarLoginIndex({
+    user: userLimpo,
+    tipo: "ADMIN",
+    empresaId: empId,
+    senha: senhaLimpa,
+    forceSenha: true
+  });
+
+  // se mudou user, apaga o antigo do índice (opcional, mas recomendado)
+  if (userAntigo && userAntigo !== userLimpo) {
+    try { await apagarLoginIndex(userAntigo); } catch {}
   }
 
-  const admin = (usuarios || []).find(u => String(u.tipo || "").toUpperCase() === "ADMIN");
-  if (!admin) return alert("❌ Admin não encontrado.");
-
-  admin.user = novoUserLimpo;
-  admin.senha = novaSenhaLimpa;
-
-  salvarNoFirebase();
-
-  alert("✅ Usuário e senha do ADMIN alterados!");
+  alert("✅ Credenciais do ADMIN atualizadas e salvas no banco!");
 }
+window.trocarCredenciaisAdmin = trocarCredenciaisAdmin;
+
 
 function exportarDados() {
   const payload = {
@@ -3319,8 +7334,6 @@ function toggleSenha(id, btn){
   btn.textContent = mostrando ? "👁️" : "🙈";
 }
 
-window.toggleSenha = toggleSenha;
-
 
 function importarDadosArquivo(event) {
   const file = event.target.files?.[0];
@@ -3354,6 +7367,7 @@ function importarDadosArquivo(event) {
 
 
 function sair() {
+  pararSnapshotAtual();
   sessaoUsuario = null;
   localStorage.removeItem("sessaoUsuario");
   window.__sessao = null; // ✅
@@ -3361,58 +7375,120 @@ function sair() {
 }
 
 
+// ✅ APAGA do índice central (config/logins) TODOS usuários da empresa
+// (não apaga MASTER)
+async function removerLoginsDaEmpresaNoIndice(empId) {
+  await ensureAuth();
+
+  empId = String(empId || "").trim().toUpperCase();
+  if (!empId) return;
+
+  const ref = loginsRef(); // doc(db, "config", "logins")
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return;
+
+  const data = snap.data() || {};
+  const usuarios = (data.usuarios && typeof data.usuarios === "object") ? data.usuarios : {};
+
+  let mudou = false;
+
+  for (const [user, info] of Object.entries(usuarios)) {
+    const emp = String(info?.empresaId || "").trim().toUpperCase();
+    const tipo = String(info?.tipo || "").trim().toUpperCase();
+
+    if (tipo === "MASTER") continue; // nunca apaga master
+
+    if (emp === empId) {
+      delete usuarios[user];
+      mudou = true;
+    }
+  }
+
+  if (mudou) {
+    await setDoc(ref, {
+      usuarios,
+      atualizadoEm: new Date().toISOString(),
+    }, { merge: true });
+  }
+}
+
+// (opcional) apagar só 1 usuário do índice (bom pra "limpar" login órfão)
+async function removerLoginDoIndice(user) {
+  await ensureAuth();
+
+  user = String(user || "").trim().toLowerCase();
+  if (!user) return;
+
+  const ref = loginsRef();
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return;
+
+  const data = snap.data() || {};
+  const usuarios = (data.usuarios && typeof data.usuarios === "object") ? data.usuarios : {};
+
+  if (!usuarios[user]) return;
+
+  delete usuarios[user];
+
+  await setDoc(ref, {
+    usuarios,
+    atualizadoEm: new Date().toISOString(),
+  }, { merge: true });
+}
+
+// ✅ checa se o doc da empresa existe
+async function empresaExiste(empId) {
+  await ensureAuth();
+
+  empId = String(empId || "").trim().toUpperCase();
+  if (!empId) return false;
+
+  const ref = doc(db, "empresas", empId, "dados", "app");
+  const snap = await getDoc(ref);
+  return snap.exists();
+}
+
+
 // =====================
 // 🏢 EMPRESAS (LISTA CENTRAL)
 // =====================
-const EMPRESA_PRINCIPAL = "STRONDA";
-
 async function criarEstruturaEmpresaSeNaoExistir(emp) {
   emp = String(emp || "").trim().toUpperCase();
   if (!emp) return;
 
+  await ensureAuth();
+
   const ref = doc(db, "empresas", emp, "dados", "app");
   const snap = await getDoc(ref);
 
-  if (snap.exists()) return; // já existe, não mexe
+  // ✅ se já existe: não recria e não reindexa senha
+  if (snap.exists()) return;
 
+  // ✅ só ADMIN da empresa (MASTER é GLOBAL e fica no config/logins)
   const usuariosBase = [
-    // ✅ MASTER (você) — pra conseguir entrar em qualquer empresa
     {
       id: Date.now(),
-      tipo: "MASTER",
-      nome: "MASTER",
-      user: "strondamusic",
-      senha: "strondamusic",
-      empresaId: "MASTER"
-    },
-
-    // ✅ ADMIN automático da empresa
-    {
-      id: Date.now() + 1,
       tipo: "ADMIN",
       nome: "ADMIN",
-      user: `admin_${emp.toLowerCase()}`, // ex: admin_empresa2
+      user: `admin_${emp.toLowerCase()}`,
       senha: "1234",
       empresaId: emp
     }
   ];
 
-    const payload = {
+  const payload = {
     atualizadoEm: new Date().toISOString(),
     ocorrencias: [],
     maquinas: [],
     acertos: [],
     usuarios: usuariosBase,
 
-    // ✅ PERFIL DA EMPRESA
     empresaPerfil: {
-      nomeEmpresa: emp,          // se ainda não tem campo, usa o ID
-      adminNome: "ADMIN",        // depois você preenche no pré-cadastro
+      nomeEmpresa: emp,
+      adminNome: "ADMIN",
       criadoEm: new Date().toISOString(),
-      // docTipo/docNumero só entra se você tiver no pré-cadastro
     },
 
-    // ✅ PAGAMENTO / BLOQUEIO
     billing: {
       diaPagamento: 5,
       ultimoPagamentoEm: new Date().toISOString(),
@@ -3422,34 +7498,128 @@ async function criarEstruturaEmpresaSeNaoExistir(emp) {
     }
   };
 
+  // 1) cria o doc da empresa
   await setDoc(ref, payload);
 
-
-  console.log("✅ Empresa criada no Firestore:", emp);
+  // 2) grava SOMENTE o admin no índice central
+  for (const u of usuariosBase) {
+    await salvarLoginIndex({
+      user: u.user,
+      tipo: u.tipo,
+      empresaId: u.empresaId,
+      senha: u.senha,
+      // ✅ como é novo, pode gravar senha; se por acaso já existir, não muda a senha
+      forceSenha: false
+    });
+  }
 }
+
+async function repararIndiceLoginsDaEmpresa(empId) {
+  empId = String(empId || "").trim().toUpperCase();
+  if (!empId) return;
+
+  await ensureAuth();
+
+  const ref = doc(db, "empresas", empId, "dados", "app");
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return;
+
+  const data = snap.data() || {};
+  const lista = Array.isArray(data.usuarios) ? data.usuarios : [];
+
+  for (const u of lista) {
+    const tipo = String(u?.tipo || "").toUpperCase();
+    if (tipo === "MASTER") continue; // ✅ NUNCA reindexa master vindo de empresa
+
+    const user = String(u?.user || "").trim().toLowerCase();
+    const senha = String(u?.senha || "").trim();
+    const empresaId = String(u?.empresaId || empId).trim().toUpperCase();
+
+    if (!user || !tipo) continue;
+
+    // ✅ NÃO muda senha de quem já existe no índice
+    // (se não existir, cria; se existir, mantém senha)
+    await salvarLoginIndex({
+      user,
+      tipo,
+      empresaId,
+      senha: senha || "1234",   // só serve caso seja novo e senha veio vazia
+      forceSenha: false
+    });
+  }
+}
+
+
+function aplicarClassePermissaoBody() {
+  document.body.classList.remove("is-admin", "is-master", "is-colab");
+
+  const t = String(sessaoUsuario?.tipo || window.sessaoUsuario?.tipo || "").toUpperCase();
+
+  if (t === "MASTER") {
+    document.body.classList.add("is-master", "is-admin");
+    return;
+  }
+  if (t === "ADMIN") {
+    document.body.classList.add("is-admin");
+    return;
+  }
+  if (t === "COLAB") {
+    document.body.classList.add("is-colab");
+  }
+}
+window.aplicarClassePermissaoBody = aplicarClassePermissaoBody;
+
 
 async function selecionarEmpresa(emp) {
   emp = String(emp || "").trim().toUpperCase();
   if (!emp) return;
 
-  pararSnapshotAtual(); // ✅ PARA snapshot antes de trocar
-
+  pararSnapshotAtual();
   setEmpresaAtual(emp);
   localStorage.setItem("empresaAtualId", emp);
 
   firebasePronto = false;
   desabilitarBotaoLogin();
 
-  await iniciarSincronizacaoFirebase();
+  // ✅ checa se empresa existe
+  const ref = doc(db, "empresas", emp, "dados", "app");
+  const snap = await getDoc(ref);
 
-  if (isLogado()) {
-    mostrarApp();
-    aplicarPermissoesUI();
-    aplicarPermissoesMenu();
-  } else {
-    mostrarTelaLogin();
+  if (!snap.exists()) {
+    // limpa e volta pra seleção/login
+    localStorage.removeItem("empresaAtualId");
+    document.body.classList.remove("is-admin", "is-master", "is-colab");
+    alert("❌ Essa empresa não existe mais.");
+    mostrarTelaLogin(); // ou abrir('selecionarEmpresa')
+    habilitarBotaoLogin();
+    return;
   }
+
+  await carregarDadosUmaVezParaLogin();
+
+  // ✅ agora sim entra
+  mostrarApp();
+  voltar();
+
+  if (validarSessaoPersistida()) {
+    aplicarClassePermissaoBody();
+    aplicarPermissoesMenu();
+    aplicarPermissoesUI();
+
+    pararSnapshotAtual();
+    __syncAtivo = false;
+    await iniciarSincronizacaoFirebase();
+  } else {
+    document.body.classList.remove("is-admin", "is-master", "is-colab");
+  }
+
+  try { listarMaquinas(); } catch {}
+  try { atualizarStatus(); } catch {}
+  try { listarOcorrencias(); } catch {}
+  try { atualizarAlertaOcorrencias(); } catch {}
 }
+
+
 window.selecionarEmpresa = selecionarEmpresa;
 
 
@@ -3491,6 +7661,27 @@ function validarPreCadastro({empId, nomeEmpresa, doc, adminNome, adminUser, admi
   };
 }
 
+// ✅ Nome bonito da empresa pelo ID (usa a lista central config/empresas)
+async function getNomeBonitoEmpresa(empId) {
+  empId = String(empId || "").trim().toUpperCase();
+  if (!empId) return "";
+
+  try {
+    // cache simples 60s
+    window.__cacheNomeEmpresa = window.__cacheNomeEmpresa || new Map();
+    const cache = window.__cacheNomeEmpresa.get(empId);
+    if (cache && (Date.now() - cache.at) < 60000) return cache.nome;
+
+    const lista = await garantirListaEmpresas(); // [{id,nome}]
+    const obj = (lista || []).find(e => String(e.id || "").toUpperCase() === empId);
+
+    const nome = String(obj?.nome || empId).trim();
+    window.__cacheNomeEmpresa.set(empId, { nome, at: Date.now() });
+    return nome;
+  } catch (e) {
+    return empId; // fallback
+  }
+}
 
 async function preCadastrarEmpresa() {
   try {
@@ -3523,34 +7714,27 @@ async function preCadastrarEmpresa() {
     const data = v.data;
 
     // 1) lista central
-    let lista = await garantirListaEmpresas();
-    if (!lista.includes(data.empId)) {
-      lista.push(data.empId);
-      await salvarListaEmpresas(lista);
+    let lista = await garantirListaEmpresas(); // [{id,nome}]
+    const idxEmp = lista.findIndex(e => String(e.id || "").toUpperCase() === data.empId);
+
+    if (idxEmp === -1) {
+      lista.push({ id: data.empId, nome: data.nomeEmpresa }); // ✅ nome real
+    } else {
+      lista[idxEmp].nome = data.nomeEmpresa; // atualiza nome
     }
+    await salvarListaEmpresas(lista);
 
     // 2) cria estrutura base se precisar
     await criarEstruturaEmpresaSeNaoExistir(data.empId);
 
     // 3) aplica dados do pré-cadastro
     const refEmpresaApp = doc(db, "empresas", data.empId, "dados", "app");
-
     const snap = await getDoc(refEmpresaApp);
-    const cur = snap.data() || {};
+    const cur = snap.exists() ? (snap.data() || {}) : {};
     const usuariosCur = Array.isArray(cur.usuarios) ? cur.usuarios : [];
 
-    // garante MASTER
-    const temMaster = usuariosCur.some(u => String(u.tipo || "").toUpperCase() === "MASTER");
-    if (!temMaster) {
-      usuariosCur.push({
-        id: Date.now(),
-        tipo: "MASTER",
-        nome: "MASTER",
-        user: "strondamusic",
-        senha: "strondamusic",
-        empresaId: "MASTER"
-      });
-    }
+    // ❌ NÃO GARANTE MASTER AQUI
+    // MASTER é GLOBAL (índice central) e não deve ser criado/alterado por empresa
 
     // garante/atualiza ADMIN da empresa
     const idx = usuariosCur.findIndex(u =>
@@ -3562,6 +7746,8 @@ async function preCadastrarEmpresa() {
       usuariosCur[idx].nome = data.adminNome.toUpperCase();
       usuariosCur[idx].user = data.adminUser;
       usuariosCur[idx].senha = data.adminSenha;
+      usuariosCur[idx].empresaId = data.empId; // garante
+      usuariosCur[idx].tipo = "ADMIN";         // garante
     } else {
       usuariosCur.push({
         id: Date.now() + 1,
@@ -3592,6 +7778,15 @@ async function preCadastrarEmpresa() {
       }
     }, { merge: true });
 
+    // ✅ salva/atualiza no índice central SOMENTE do ADMIN que você acabou de criar
+    // (e com a função salvarLoginIndex corrigida pra não sobrescrever senha de usuário existente)
+    await salvarLoginIndex({
+      user: data.adminUser,
+      tipo: "ADMIN",
+      empresaId: data.empId,
+      senha: data.adminSenha
+    });
+
     // 4) seleciona e atualiza UI
     await selecionarEmpresa(data.empId);
     await listarEmpresasUI();
@@ -3599,7 +7794,7 @@ async function preCadastrarEmpresa() {
     alert("✅ Empresa cadastrada com sucesso!");
 
     // 5) limpa campos
-    ["pcEmpId","pcNomeEmpresa","pcDoc","pcAdminNome","pcAdminUser","pcAdminSenha"].forEach(id=>{
+    ["pcEmpId","pcNomeEmpresa","pcDoc","pcAdminNome","pcAdminUser","pcAdminSenha"].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.value = "";
     });
@@ -3615,7 +7810,6 @@ async function preCadastrarEmpresa() {
 
 window.preCadastrarEmpresa = preCadastrarEmpresa;
 
-
 function empresasConfigRef() {
   return doc(db, "config", "empresas");
 }
@@ -3625,29 +7819,75 @@ async function garantirListaEmpresas() {
   const snap = await getDoc(ref);
 
   if (!snap.exists()) {
-    await setDoc(ref, {
-      atualizadoEm: new Date().toISOString(),
-      empresas: [EMPRESA_PRINCIPAL]
-    });
-    return [EMPRESA_PRINCIPAL];
+    const inicial = [{ id: EMPRESA_PRINCIPAL_ID, nome: EMPRESA_PRINCIPAL_NOME }];
+    await setDoc(ref, { atualizadoEm: new Date().toISOString(), empresas: inicial });
+    return inicial;
   }
 
   const data = snap.data() || {};
   let lista = Array.isArray(data.empresas) ? data.empresas : [];
-  lista = lista.map(e => String(e || "").trim().toUpperCase()).filter(Boolean);
 
-  if (!lista.includes(EMPRESA_PRINCIPAL)) {
-    lista.unshift(EMPRESA_PRINCIPAL);
-    await setDoc(ref, { empresas: lista, atualizadoEm: new Date().toISOString() }, { merge: true });
+  lista = lista
+    .map(e => {
+      // compat: se antes era string
+      if (typeof e === "string") {
+        const id = e.trim().toUpperCase();
+        return { id, nome: id };
+      }
+
+      const id = String(e?.id || "").trim().toUpperCase();
+      let nome = String(e?.nome || id).trim();
+
+      // ✅ FORÇA nome bonito da principal
+      if (id === EMPRESA_PRINCIPAL_ID.toUpperCase()) {
+        nome = EMPRESA_PRINCIPAL_NOME;
+      }
+
+      return { id, nome };
+    })
+    .filter(x => x.id);
+
+  // ✅ garante principal na lista e com nome bonito
+  if (!lista.some(x => x.id === EMPRESA_PRINCIPAL_ID.toUpperCase())) {
+    lista.unshift({ id: EMPRESA_PRINCIPAL_ID.toUpperCase(), nome: EMPRESA_PRINCIPAL_NOME });
   }
+
+  // salva de volta se precisou corrigir/migrar
+  await setDoc(ref, { empresas: lista, atualizadoEm: new Date().toISOString() }, { merge: true });
 
   return lista;
 }
 
+
 async function salvarListaEmpresas(lista) {
   const ref = empresasConfigRef();
-  await setDoc(ref, { empresas: lista, atualizadoEm: new Date().toISOString() }, { merge: true });
+
+  const normalizada = (lista || [])
+    .map(e => {
+      if (typeof e === "string") {
+        const id = e.trim().toUpperCase();
+        return { id, nome: id };
+      }
+      const id = String(e?.id || "").trim().toUpperCase();
+      let nome = String(e?.nome || id).trim();
+
+      // ✅ FORÇA nome bonito da principal
+      if (id === EMPRESA_PRINCIPAL_ID.toUpperCase()) {
+        nome = EMPRESA_PRINCIPAL_NOME;
+      }
+
+      return { id, nome };
+    })
+    .filter(x => x.id);
+
+  await setDoc(ref, {
+    atualizadoEm: new Date().toISOString(),
+    empresas: normalizada
+  }, { merge: true });
+
+  return normalizada;
 }
+
 
 async function listarEmpresasUI() {
   if (!exigirMaster()) return;
@@ -3655,10 +7895,10 @@ async function listarEmpresasUI() {
   const ul = document.getElementById("listaEmpresas");
   if (!ul) return;
 
-  let lista = await garantirListaEmpresas();
+  let lista = await garantirListaEmpresas(); // [{id,nome}]
 
-  // ✅ REMOVE A PRINCIPAL DA TELA (mas continua existindo no Firestore)
-  lista = lista.filter(emp => emp !== EMPRESA_PRINCIPAL);
+  // remove principal da tela
+  lista = lista.filter(e => e.id !== EMPRESA_PRINCIPAL);
 
   ul.innerHTML = "";
 
@@ -3667,7 +7907,10 @@ async function listarEmpresasUI() {
     return;
   }
 
-  lista.forEach((emp) => {
+  lista.forEach((obj) => {
+    const empId = obj.id;
+    const nome = obj.nome || empId;
+
     const li = document.createElement("li");
     li.style.display = "flex";
     li.style.gap = "10px";
@@ -3678,102 +7921,509 @@ async function listarEmpresasUI() {
     li.style.background = "#0f172a";
     li.style.marginTop = "8px";
 
+    // ✅ Selecionar
     const btnSel = document.createElement("button");
     btnSel.type = "button";
-    btnSel.textContent = `✅ Selecionar ${emp}`;
+    btnSel.textContent = `✅ Selecionar ${nome}`;
     btnSel.style.flex = "1";
-    btnSel.onclick = () => selecionarEmpresa(emp);
+    btnSel.onclick = () => selecionarEmpresa(empId);
 
+    // ✅ Editar
+    const btnEdit = document.createElement("button");
+    btnEdit.type = "button";
+    btnEdit.textContent = "✏️";
+    btnEdit.style.width = "60px";
+    btnEdit.onclick = () => abrirEdicaoEmpresa(empId, nome);
+
+    // ✅ Apagar (com senha MASTER)
     const btnDel = document.createElement("button");
     btnDel.type = "button";
     btnDel.textContent = "🗑";
     btnDel.style.width = "60px";
 
     btnDel.onclick = async () => {
-
       pararSnapshotAtual();
-  try {
-    if (!confirm(`Apagar a empresa ${emp}?`)) return;
 
-    // ✅ tira da tela na hora (UX + evita recarregar lista)
-    li.remove();
+      try {
+        const senha = await pedirSenhaMasterMask("🔐 Digite a senha do MASTER para apagar esta empresa:");
+        if (senha === null) return;
 
-    // 1) remove da lista central (1 write)
-    const nova = (await garantirListaEmpresas()).filter(x => x !== emp);
-    await salvarListaEmpresas(nova);
+        const ok = await confirmarSenhaMasterDigitada(senha);
+        if (!ok) {
+          alert("❌ Senha do MASTER incorreta.");
+          return;
+        }
 
-    // 2) apaga o doc principal da empresa (1 write)
-    await deleteDoc(doc(db, "empresas", emp, "dados", "app"));
+        if (!confirm(`Apagar a empresa ${nome} (${empId})? Essa ação não tem volta.`)) return;
 
-    alert("✅ Empresa apagada!");
-  } catch (e) {
-    console.error(e);
+        li.remove();
 
-    // se deu erro, recarrega lista pra não ficar UI “mentindo”
-    try { await listarEmpresasUI(); } catch {}
+        // remove da lista central
+        const nova = (await garantirListaEmpresas()).filter(x => x.id !== empId);
+        await salvarListaEmpresas(nova);
 
-    // ✅ mensagem certa pra quota
-    if (String(e?.code || "").includes("resource-exhausted") || /quota/i.test(String(e?.message||""))) {
-      alert("❌ Firestore estourou a quota agora. Reduza leituras/gravações (vou te mostrar abaixo e o que mudar).");
-    } else {
-      alert("❌ Não consegui apagar.\n\n" + (e?.message || e));
-    }
-  }
-};
+        // apaga doc da empresa
+        // apaga doc da empresa
+await deleteDoc(doc(db, "empresas", empId, "dados", "app"));
+
+// ✅ MUITO IMPORTANTE: apaga os logins dessa empresa no índice central
+await removerLoginsDaEmpresaNoIndice(empId);
+
+alert("✅ Empresa apagada!");
+      } catch (e) {
+        console.error(e);
+        try { await listarEmpresasUI(); } catch {}
+
+        if (String(e?.code || "").includes("resource-exhausted") || /quota/i.test(String(e?.message || ""))) {
+          alert("❌ Firestore estourou a quota agora. Reduza leituras/gravações.");
+        } else {
+          alert("❌ Não consegui apagar.\n\n" + (e?.message || e));
+        }
+      }
+    };
 
     li.appendChild(btnSel);
+    li.appendChild(btnEdit);
     li.appendChild(btnDel);
     ul.appendChild(li);
   });
 }
 
+async function confirmarSenhaMasterDigitada(senhaDigitada) {
+  const empMaster =
+    (window.sessaoUsuario && window.sessaoUsuario.empresaId) ||
+    (window.sessao && window.sessao.empresaId) ||
+    (window.usuarioSessao && window.usuarioSessao.empresaId) ||
+    "STRONDA-MUSIC";
+
+  const userMaster =
+    (window.sessaoUsuario && window.sessaoUsuario.user) ||
+    (window.sessao && window.sessao.user) ||
+    (window.usuarioSessao && window.usuarioSessao.user) ||
+    "strondamusic";
+
+  const ref = doc(db, "empresas", empMaster, "dados", "app");
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return false;
+
+  const data = snap.data() || {};
+  const usuarios = Array.isArray(data.usuarios) ? data.usuarios : [];
+
+  // acha o usuário MASTER pelo login
+  const u = usuarios.find(x => String(x?.user || x?.usuario || "").toLowerCase() === String(userMaster).toLowerCase());
+  const senhaReal = String(u?.senha || u?.pass || u?.password || "").trim();
+
+  console.log("VALIDAR MASTER VIA usuarios[] -> emp:", empMaster, "user:", userMaster, "achou:", !!u, "senhaExiste:", !!senhaReal);
+
+  return senhaReal && String(senhaDigitada || "").trim() === senhaReal;
+}
+
+
+async function abrirEdicaoEmpresa(empId, nomeFallback) {
+  try {
+    if (!exigirMaster()) return;
+
+    // 🔥 Lê do lugar onde você salva o pré-cadastro
+    const ref = doc(db, "empresas", empId, "dados", "app");
+    const snap = await getDoc(ref);
+
+    if (!snap.exists()) {
+      alert("❌ Não achei os dados dessa empresa no Firestore.");
+      return;
+    }
+
+    const data = snap.data() || {};
+
+    // ✅ Campos do formulário
+    const elEmpId       = document.getElementById("pcEmpId");
+    const elNomeEmpresa = document.getElementById("pcNomeEmpresa");
+    const elDoc         = document.getElementById("pcDoc");
+    const elAdminNome   = document.getElementById("pcAdminNome");
+    const elAdminUser   = document.getElementById("pcAdminUser");
+    const elAdminSenha  = document.getElementById("pcAdminSenha");
+    const elDiaPag      = document.getElementById("pcDiaPagamento");
+
+    if (!elEmpId || !elNomeEmpresa || !elDoc || !elAdminNome || !elAdminUser || !elAdminSenha || !elDiaPag) {
+      alert("❌ Não encontrei os campos do pré-cadastro. Confira os IDs no HTML.");
+      return;
+    }
+
+    // ✅ Preenche com dados antigos
+    elEmpId.value = data.empId || empId;
+    elEmpId.readOnly = true;
+
+    elNomeEmpresa.value = data.nomeEmpresa || nomeFallback || "";
+    elDoc.value = data.doc || "";                 // CPF/CNPJ salvo
+    elDiaPag.value = data.diaPagamento ?? 5;
+
+    elAdminNome.value = data.adminNome || "";
+    elAdminUser.value = data.adminUser || "";
+    elAdminSenha.value = data.adminSenha || "";   // ✅ AQUI puxa a senha antiga
+
+    // ✅ Troca o botão para salvar alterações
+    const btn = document.getElementById("btnPreCadastrarEmpresa");
+    if (!btn) {
+      alert("❌ Botão btnPreCadastrarEmpresa não encontrado no HTML.");
+      return;
+    }
+
+    btn.textContent = "💾 Salvar alterações";
+    btn.onclick = () => salvarEdicaoEmpresa(empId);
+
+    // abre a tela
+    abrir("selecionarEmpresa");
+  } catch (e) {
+    console.error(e);
+    alert("❌ Não consegui abrir edição.\n\n" + (e?.message || e));
+  }
+}
+
+
+
+
+function cancelarEdicaoEmpresa() {
+  // volta botão principal para cadastro
+  const btn = document.getElementById("btnPreCadastrarEmpresa");
+  btn.textContent = "➕ Cadastrar Empresa";
+  btn.onclick = () => preCadastrarEmpresa();
+
+  // libera campo ID
+  const elEmpId = document.getElementById("pcEmpId");
+  elEmpId.readOnly = false;
+
+  // esconde o voltar/cancelar
+  const btnCancel = document.getElementById("btnCancelarEdicaoEmpresa");
+  if (btnCancel) btnCancel.style.display = "none";
+}
+
+async function salvarEdicaoEmpresa(empId) {
+  try {
+    if (!exigirMaster()) return;
+
+    const nomeEmpresa = String(document.getElementById("pcNomeEmpresa").value || "").trim();
+    const docu = onlyDigits(document.getElementById("pcDoc").value || "");
+    const diaPagamento = Number(document.getElementById("pcDiaPagamento").value || 5);
+
+    const adminNome  = String(document.getElementById("pcAdminNome").value || "").trim();
+    const adminUser  = String(document.getElementById("pcAdminUser").value || "").trim().toLowerCase();
+    const adminSenha = String(document.getElementById("pcAdminSenha").value || "").trim();
+
+    if (!nomeEmpresa) return alert("❌ Nome da empresa é obrigatório.");
+    if (!(diaPagamento >= 1 && diaPagamento <= 28)) return alert("❌ Dia de pagamento deve ser de 1 a 28.");
+
+    const docTipo = detectarDocTipo(docu);
+    if (docTipo === "INVALIDO") {
+      return alert("❌ CPF/CNPJ inválido. Use 11 (CPF) ou 14 (CNPJ) dígitos, ou deixe em branco.");
+    }
+
+    // update parcial (merge) -> não apaga campos que já existem
+    const update = {
+      nomeEmpresa,
+      doc: docu,
+      docTipo,
+      diaPagamento,
+      atualizadoEm: Date.now(),
+    };
+
+    // só atualiza admin se estiver preenchido
+    if (adminNome) update.adminNome = adminNome;
+    if (adminUser) update.adminUser = adminUser;
+
+    // só muda senha se digitou uma nova
+    if (adminSenha) {
+      if (adminSenha.length < 4) return alert("❌ Senha do ADMIN mínimo 4 caracteres.");
+      update.adminSenha = adminSenha;
+    }
+
+    await setDoc(doc(db, "empresas", empId, "dados", "app"), update, { merge: true });
+
+    alert("✅ Empresa atualizada!");
+
+    // volta modo cadastro
+    cancelarEdicaoEmpresa();
+
+    // atualiza lista
+    await listarEmpresasUI();
+  } catch (e) {
+    console.error(e);
+    alert("❌ Não consegui salvar alterações.\n\n" + (e?.message || e));
+  }
+}
+
+
+
+async function preencherSelectEmpresas(selId, lblId = null) {
+  const sel = document.getElementById(selId);
+  if (!sel) return;
+
+  try {
+    await ensureAuth();
+
+    let lista = await garantirListaEmpresas(); // [{id,nome}]
+
+    const norm = (lista || [])
+      .map(e => {
+        if (typeof e === "string") {
+          const id = e.trim().toUpperCase();
+          return { id, nome: id };
+        }
+        const id = String(e?.id || "").trim().toUpperCase();
+        let nome = String(e?.nome || "").trim();
+
+        if (id === EMPRESA_PRINCIPAL_ID && !nome) nome = EMPRESA_PRINCIPAL_NOME;
+
+
+        return { id, nome: nome || id };
+      })
+      .filter(x => x.id);
+
+    sel.innerHTML = `<option value="">Selecione...</option>`;
+
+    norm.forEach(({ id, nome }) => {
+      const opt = document.createElement("option");
+      opt.value = id;         // ✅ o ID continua sendo o valor
+      opt.textContent = nome; // ✅ nome bonito
+
+      opt.dataset.nome = nome;
+      sel.appendChild(opt);
+    });
+
+    // opcional: mostrar nome selecionado em um label
+    if (lblId) {
+      const lbl = document.getElementById(lblId);
+      const atualizar = () => {
+        const opt = sel.options[sel.selectedIndex];
+        const nome = opt?.dataset?.nome || "";
+        if (lbl) lbl.textContent = nome ? `🏢 ${nome}` : "";
+      };
+      sel.onchange = atualizar;
+      atualizar();
+    }
+
+  } catch (e) {
+    console.error("❌ erro preencherSelectEmpresas:", e);
+    // fallback mínimo
+    sel.innerHTML = `
+  <option value="">Selecione...</option>
+  <option value="${EMPRESA_PRINCIPAL_ID}">${EMPRESA_PRINCIPAL_NOME}</option>
+`;
+  }
+}
+window.preencherSelectEmpresas = preencherSelectEmpresas;
+
 
 async function adicionarEmpresa() {
   if (!exigirMaster()) return;
 
-  const inp = document.getElementById("empresaNova");
-  const nome = String(inp?.value || "").trim().toUpperCase();
+  const empId = prompt("ID da empresa (ex: EMPRESA2):");
+  if (empId === null) return;
 
-  if (!nome) return alert("❌ Digite um nome de empresa.");
-  if (nome === EMPRESA_PRINCIPAL) return alert("⚠️ STRONDA já é a principal.");
+  const id = String(empId).trim().toUpperCase();
+  if (!id) return alert("❌ ID inválido.");
+  if (id === EMPRESA_PRINCIPAL) return alert("⚠️ EMPRESA_PRINCIPAL_ID já é a principal.");
 
-  let lista = await garantirListaEmpresas();
-  if (lista.includes(nome)) return alert("⚠️ Empresa já existe.");
+  const nomeBonito = prompt("Nome completo da empresa (vai aparecer na ocorrência):", id);
+  if (nomeBonito === null) return;
 
-  lista.push(nome);
+  const nome = String(nomeBonito).trim();
+  if (!nome) return alert("❌ Nome não pode ficar vazio.");
+
+  let lista = await garantirListaEmpresas(); // [{id,nome}]
+
+  const idx = lista.findIndex(e => String(e.id || "").toUpperCase() === id);
+  if (idx === -1) {
+    lista.push({ id, nome });
+  } else {
+    lista[idx].nome = nome; // atualiza nome se mudou
+  }
+
   await salvarListaEmpresas(lista);
 
-  // ✅ cria /empresas/NOME/dados/app com MASTER + ADMIN automático
-  await criarEstruturaEmpresaSeNaoExistir(nome);
+  // cria estrutura /empresas/ID/dados/app se precisar
+  await criarEstruturaEmpresaSeNaoExistir(id);
 
-  if (inp) inp.value = "";
   await listarEmpresasUI();
-  alert("✅ Empresa adicionada!");
+  alert("✅ Empresa adicionada com nome completo!");
 }
+window.adicionarEmpresa = adicionarEmpresa;
+
+
+async function carregarEmpresas() {
+  const lista = document.getElementById("listaEmpresas"); // <-- seu container da lista
+  lista.innerHTML = "Carregando...";
+
+  const snap = await getDocs(collection(db, "empresas"));
+
+  if (snap.empty) {
+    lista.innerHTML = "Nenhuma empresa cadastrada ainda.";
+    return;
+  }
+
+  lista.innerHTML = "";
+  snap.forEach((docu) => {
+    const e = docu.data();
+    const div = document.createElement("div");
+    div.textContent = `${e.nomeEmpresa ?? "(sem nome)"} - ID: ${docu.id}`;
+    lista.appendChild(div);
+  });
+}
+
 
 async function carregarEmpresasPublicasFirestore() {
   const sel = document.getElementById("pubOcEmpresa");
   if (!sel) return;
 
   try {
-    let lista = await garantirListaEmpresas();
-    lista = (lista || []).map(e => String(e || "").trim().toUpperCase()).filter(Boolean);
+    // ✅ GARANTE LOGIN ANÔNIMO ANTES DE LER O FIRESTORE
+    await ensureAuth();
+
+    let lista = await garantirListaEmpresas(); // [{id,nome}] ou ["EMP1"]
+
+    // normaliza para [{id,nome}]
+    const norm = (lista || [])
+      .map(e => {
+        if (typeof e === "string") {
+          const id = e.trim().toUpperCase();
+          return { id, nome: id };
+        }
+        const id = String(e?.id || "").trim().toUpperCase();
+        let nome = String(e?.nome || "").trim();
+
+        // ✅ garante o nome bonito da principal
+        if (id === EMPRESA_PRINCIPAL_ID && !nome) nome = EMPRESA_PRINCIPAL_NOME;
+
+
+        return { id, nome: nome || id };
+      })
+      .filter(x => x.id);
 
     sel.innerHTML = `<option value="">Selecione...</option>`;
 
-    // ✅ SEM getDoc por empresa (economiza MUITO)
-    for (const empId of lista) {
-      sel.innerHTML += `<option value="${empId}">${empId}</option>`;
+    norm.forEach(({ id, nome }) => {
+      const opt = document.createElement("option");
+      opt.value = id;
+      opt.textContent = nome; // ✅ nome bonito
+      opt.dataset.nome = nome;
+      sel.appendChild(opt);
+    });
+
+    // (opcional) label embaixo mostrando nome selecionado
+    const lbl = document.getElementById("pubOcEmpresaNome");
+    function atualizarNomeSelecionado() {
+      const opt = sel.options[sel.selectedIndex];
+      const nome = opt?.dataset?.nome || "";
+      if (lbl) lbl.textContent = nome ? `🏢 ${nome}` : "";
     }
+    sel.onchange = atualizarNomeSelecionado;
+    atualizarNomeSelecionado();
 
     const numEl = document.getElementById("pubOcNum");
     if (numEl) numEl.disabled = !sel.value;
 
   } catch (e) {
     console.error("❌ erro carregar empresas públicas:", e);
-    sel.innerHTML = `<option value="">Selecione...</option><option value="STRONDA">STRONDA</option>`;
+
+    // ✅ fallback melhor: já mostra EMPRESA_PRINCIPAL_ID em vez de EMPRESA_PRINCIPAL_ID
+    sel.innerHTML = `
+      <option value="">Selecione...</option>
+      <option value="${EMPRESA_PRINCIPAL_ID}">${EMPRESA_PRINCIPAL_NOME}</option>
+    `;
   }
 }
+
+function setRoleUI() {
+  aplicarClassePermissaoBody();
+}
+
+
+
+
+function loginsRef() {
+  return doc(db, "config", "logins");
+}
+
+async function salvarLoginIndex({ user, tipo, empresaId, senha, forceSenha = false }) {
+  await ensureAuth();
+
+  user = String(user || "").trim().toLowerCase();
+  if (!user) throw new Error("❌ salvarLoginIndex: user inválido");
+
+  const tipoNorm = String(tipo || "").trim().toUpperCase();
+  const empNorm  = String(empresaId || "").trim().toUpperCase();
+  const senhaNorm = String(senha || "").trim();
+
+  const ref = doc(db, "config", "logins");
+  const snap = await getDoc(ref);
+
+  const data = snap.exists() ? (snap.data() || {}) : {};
+  const usuarios = (data.usuarios && typeof data.usuarios === "object") ? data.usuarios : {};
+
+  const atual = usuarios[user];
+
+  if (atual) {
+    // ✅ usuário já existe → NÃO altera senha (a não ser que forceSenha=true)
+    const novo = {
+      ...atual,
+      tipo: tipoNorm || atual.tipo,
+      empresaId: empNorm || atual.empresaId,
+    };
+
+    if (forceSenha) {
+      if (!senhaNorm) throw new Error("❌ forceSenha=true mas senha vazia");
+      novo.senha = senhaNorm;
+    }
+
+    usuarios[user] = novo;
+  } else {
+    // ✅ usuário novo → cria com senha
+    if (!senhaNorm) throw new Error("❌ criar login novo sem senha");
+
+    usuarios[user] = {
+      empresaId: empNorm,
+      senha: senhaNorm,
+      tipo: tipoNorm || "COLAB",
+    };
+  }
+
+  await setDoc(ref, {
+    usuarios,
+    atualizadoEm: new Date().toISOString(),
+  }, { merge: true });
+
+  return true;
+}
+
+async function buscarLoginIndex(user) {
+  user = String(user || "").trim().toLowerCase();
+  if (!user) return null;
+
+  const snap = await getDoc(loginsRef());
+  if (!snap.exists()) return null;
+
+  const data = snap.data() || {};
+  const u = data.usuarios?.[user] || null;
+  return u;
+}
+
+
+async function salvarMaquinasNoFirestore(empId, listaMaquinas) {
+  await ensureAuth();
+
+  empId = String(empId || "").trim().toUpperCase();
+  if (!empId) throw new Error("empId vazio");
+
+  const ref = doc(db, "empresas", empId, "dados", "app");
+
+  const maquinasArray = Array.isArray(listaMaquinas) ? listaMaquinas : [];
+
+  await setDoc(ref, {
+    atualizadoEm: new Date().toISOString(),
+    maquinas: maquinasArray
+  }, { merge: true });
+
+  console.log("✅ Firestore atualizado: maquinas =", maquinasArray.length, "empresa =", empId);
+}
+window.salvarMaquinasNoFirestore = salvarMaquinasNoFirestore;
 
 
 
@@ -3781,32 +8431,139 @@ function ligarEventosOcorrenciaPublica() {
   const sel = document.getElementById("pubOcEmpresa");
   const numEl = document.getElementById("pubOcNum");
   const estabEl = document.getElementById("pubOcEstab");
-
   if (!sel || !numEl || !estabEl) return;
 
-  sel.addEventListener("change", () => {
+  numEl.disabled = !sel.value;
+
+  sel.addEventListener("change", async () => {
+    const empId = normalizarEmpId(sel.value);
+
     numEl.value = "";
     estabEl.value = "";
-    numEl.disabled = !sel.value;
+    numEl.disabled = !empId;
+
+    if (!empId) {
+      window.pubMaquinas = [];
+      return;
+    }
+
+    await carregarMaquinasPublicasDaEmpresa(empId);
   });
 
   let t = null;
   numEl.addEventListener("input", () => {
     clearTimeout(t);
 
-    const emp = sel.value;
+    const empId = normalizarEmpId(sel.value);
     const num = (numEl.value || "").trim().toUpperCase();
     numEl.value = num;
     estabEl.value = "";
 
-    if (!emp || !num) return;
+    if (!empId || !num) return;
 
-    t = setTimeout(async () => {
-      const estab = await buscarEstabPorEmpresaENumero(emp, num);
-      estabEl.value = estab ? estab : "❌ MÁQUINA NÃO ENCONTRADA";
-    }, 300);
+    t = setTimeout(() => {
+      const lista = Array.isArray(window.pubMaquinas) ? window.pubMaquinas : [];
+
+      const maq = lista.find(m => {
+        const n = String(m?.numero ?? m?.num ?? m?.codigo ?? m?.id ?? "").trim().toUpperCase();
+        return n === num;
+      });
+
+      estabEl.value = maq
+        ? String(maq?.estab ?? maq?.estabelecimento ?? maq?.local ?? "").trim().toUpperCase()
+        : "❌ MÁQUINA NÃO ENCONTRADA";
+    }, 250);
   });
 }
+window.ligarEventosOcorrenciaPublica = ligarEventosOcorrenciaPublica;
+
+
+
+// =======================
+// 🔔 ALERTA DE OCORRÊNCIAS
+// =======================
+function atualizarAlertaOcorrencias() {
+  try {
+    // garante array
+    const lista = Array.isArray(ocorrencias) ? ocorrencias : [];
+
+    // considera "pendente" se NÃO estiver concluída
+    // (aceita vários formatos: concluida, concluído, status, etc.)
+    const pendentes = lista.filter(o => {
+      if (!o) return false;
+
+      // se tiver status textual
+      const st = String(o.status || o.state || "").toUpperCase().trim();
+      if (st) return !(st.includes("CONCL") || st.includes("FINAL") || st.includes("RESOLV"));
+
+      // se tiver boolean de concluído
+      if (typeof o.concluida === "boolean") return !o.concluida;
+      if (typeof o.concluido === "boolean") return !o.concluido;
+
+      // se tiver campo "finalizado"
+      if (typeof o.finalizado === "boolean") return !o.finalizado;
+
+      // default: se não tem nada, conta como pendente
+      return true;
+    });
+
+    const n = pendentes.length;
+
+    // ✅ PISCA 2 BOLINHAS NO BOTÃO "OCORRÊNCIAS"
+const btnOc =
+  document.getElementById("btnOcorrencias") ||
+  document.querySelector("[data-btn='ocorrencias']") ||
+  Array.from(document.querySelectorAll("button, a, div"))
+    .find(el => (el.textContent || "").trim().toUpperCase().includes("OCORRÊNCIAS"));
+
+if (btnOc) {
+  if (n > 0) btnOc.classList.add("tem-alerta");
+  else btnOc.classList.remove("tem-alerta");
+}
+
+
+    // 1) atualiza um badge se existir
+    const badge =
+      document.getElementById("badgeOcorrencias") ||
+      document.querySelector("[data-badge='ocorrencias']") ||
+      document.querySelector(".badge-ocorrencias");
+
+    if (badge) {
+      badge.textContent = n ? String(n) : "";
+      badge.style.display = n ? "inline-flex" : "none";
+    }
+
+    // 2) muda o texto do botão/menu "Ocorrências" se achar
+    // (ajusta os seletores conforme seu HTML)
+    const btn =
+      document.getElementById("btnOcorrencias") ||
+      document.querySelector("[data-btn='ocorrencias']") ||
+      Array.from(document.querySelectorAll("button, a, div"))
+        .find(el => (el.textContent || "").trim().toUpperCase() === "OCORRÊNCIAS");
+
+    if (btn) {
+      // não destrói o texto original se você já usa HTML interno
+      // aqui só adiciona um sufixo simples
+      const base = "Ocorrências";
+      btn.textContent = n ? `${base} (${n})` : base;
+    }
+
+    // 3) opcional: título da aba
+      try {
+  const empId = String(empresaAtualId || EMPRESA_PRINCIPAL_ID).toUpperCase();
+  getNomeBonitoEmpresa(empId).then(nome => {
+    document.title = nome || EMPRESA_PRINCIPAL_NOME;
+  });
+} catch {}
+
+  } catch (e) {
+    console.warn("atualizarAlertaOcorrencias falhou:", e);
+  }
+}
+
+// deixa global (garante que chamadas diretas funcionem)
+window.atualizarAlertaOcorrencias = atualizarAlertaOcorrencias;
+
 
 
 function ligarAutoEstabPorEmpresaENumero({ selId, numId, estabId }) {
@@ -3847,33 +8604,80 @@ function ligarAutoEstabPorEmpresaENumero({ selId, numId, estabId }) {
   numEl.disabled = !sel.value;
 }
 
+// ==========================
+// ✅ FECHAMENTO: modo (DIARIO | MENSAL)
+// ==========================
+window.__fcModo = window.__fcModo || "DIARIO";
+
+window.fcSetModo = function (modo) {
+  window.__fcModo = String(modo || "DIARIO").toUpperCase();
+  renderFechamentoCaixa();
+};
+
+
+window.ligarUIFechamentoCaixa = function () {
+  const ini = document.getElementById("fcIni");
+  const fim = document.getElementById("fcFim");
+  const bDia = document.getElementById("btnFCDiario");
+  const bMes = document.getElementById("btnFCMensal");
+  const bGerar = document.getElementById("btnFCGerar");
+
+
+  if (!ini || !fim || !bDia || !bMes) return;
+
+  ini.addEventListener("change", renderFechamentoCaixa);
+  fim.addEventListener("change", renderFechamentoCaixa);
+
+  bDia.addEventListener("click", () => window.fcSetModo("DIARIO"));
+  bMes.addEventListener("click", () => window.fcSetModo("MENSAL"));
+
+  if (bGerar) bGerar.addEventListener("click", renderFechamentoCaixa);
+};
+
+// liga 1x só
+window.addEventListener("load", () => {
+  try { window.ligarUIFechamentoCaixa(); } catch (e) { console.log(e); }
+  
+});
+
+
+
+
 async function setNomeEmpresa(empId, nomeBonito) {
   empId = String(empId || "").trim().toUpperCase();
   nomeBonito = String(nomeBonito || "").trim();
+  if (!empId || !nomeBonito) return;
 
+  await ensureAuth();
+
+  // 1) salva no DOC da empresa
   const ref = doc(db, "empresas", empId, "dados", "app");
+  await setDoc(ref, { empresaPerfil: { nomeEmpresa: nomeBonito } }, { merge: true });
 
-  await setDoc(ref, {
-    empresaPerfil: { nomeEmpresa: nomeBonito }
-  }, { merge: true });
+  // 2) salva também na lista central (config/empresas)
+  let lista = await garantirListaEmpresas(); // [{id,nome}]
+  const idx = lista.findIndex(e => String(e.id || "").toUpperCase() === empId);
 
-  console.log("✅ Nome atualizado:", empId, "->", nomeBonito);
+  if (idx === -1) lista.push({ id: empId, nome: nomeBonito });
+  else lista[idx].nome = nomeBonito; // ✅ AQUI
 
-  // recarrega o select público
-  try { carregarEmpresasPublicasFirestore(); } catch {}
+  await salvarListaEmpresas(lista);
+  return true;
 }
-
-// expõe pro console (porque é module)
 window.setNomeEmpresa = setNomeEmpresa;
-
 
 
 // =====================
 // ✅ EXPOR FUNÇÕES PRO HTML (porque script.js é type="module")
 // =====================
 Object.assign(window, {
+  arAutoPorNumero,
+  salvarRelogioAtualAdmin,
   exportarDados,
   importarDadosArquivo,
+  salvarLoginIndex,
+  buscarLoginIndex,
+  repararIndiceLoginsDaEmpresa,
   iniciarSincronizacaoFirebase,
   salvarNoFirebase,
   definirEmpresa,
@@ -3930,6 +8734,9 @@ Object.assign(window, {
   mostrarTelaLogin,
   preCadastrarEmpresa,
   setNomeEmpresa,
+  fcSetDiarioHoje,
+  fcSetMensalAtual,
+  renderFechamentoCaixa,
 });
 
 
@@ -3948,8 +8755,6 @@ console.log(typeof window.crAutoPorNumero);
 console.log(typeof window.avisarTodosColaboradores);
 
 
-
-window.fazerLogin = fazerLogin;
 window.toggleSenha = toggleSenha;
 window.mostrarApp = mostrarApp;
 
@@ -3965,46 +8770,1230 @@ console.log("OK carregou script");
 console.log("fazerLogin:", typeof window.fazerLogin);
 console.log("abrirWhatsTexto:", typeof window.abrirWhatsTexto);
 
+// ✅ ALIAS: evita crash se você trocar o nome sem querer
+// se alguém chamar carregarSessao(), não quebra o app
+if (typeof window.carregarSessao !== "function") {
+  window.carregarSessao = function () {
+    try {
+      // Se você tiver uma lógica real de "carregar sessão", chame aqui.
+      // Por enquanto: apenas loga e retorna false/true.
+      const ok = !!window.__sessao;
+      console.log("carregarSessao (alias):", ok ? "tem sessão" : "sem sessão");
+      return ok;
+    } catch (e) {
+      console.warn("carregarSessao (alias) falhou:", e);
+      return false;
+    }
+  };
+}
+
 let __visReconnAt = 0;
 
-window.addEventListener("load", () => {
-  carregarSessao();
+function carregarSessao() {
+  sessaoUsuario = null;
+}
 
-  setEmpresaAtual(localStorage.getItem("empresaAtualId") || EMPRESA_PRINCIPAL);
-  carregarDadosUmaVezParaLogin();
+window.carregarSessao = carregarSessao; // ✅ garante global
 
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden) {
-      pararSnapshotAtual();
-      return;
-    }
 
-    if (__firestoreBloqueado) return;
+function validarSessaoPersistida() {
+  if (!sessaoUsuario) return false;
 
-    const now = Date.now();
-    if (now - __visReconnAt < 3000) return; // ✅ 3s de trava
-    __visReconnAt = now;
+  const user = String(sessaoUsuario.user || "").toLowerCase();
+  const tipo = String(sessaoUsuario.tipo || "").toUpperCase();
+  const empAtual = String(empresaAtualId || "").toUpperCase();
+  if (!user || !tipo) return false;
 
-    iniciarSincronizacaoFirebase();
-  });
-
-  // ✅ mantém o resto que você já tinha aqui embaixo:
-  if (sessaoUsuario) {
-    mostrarApp();
-    aplicarPermissoesUI();
-    aplicarPermissoesMenu();
-  } else {
-    mostrarTelaLogin();
-    limparCamposLogin();
+  const criadoEm = Number(sessaoUsuario.criadoEm || 0);
+  if (criadoEm && (Date.now() - criadoEm) > (12 * 60 * 60 * 1000)) {
+    limparSessao();
+    return false;
   }
 
-  carregarEmpresasPublicasFirestore();
-  ligarEventosOcorrenciaPublica();
+  // ✅ MASTER não depende do array de usuários da empresa
+  if (tipo === "MASTER") return true;
+
+  // ✅ ADMIN/COLAB dependem da empresa atual
+  const u = (usuarios || []).find(x =>
+    String(x.user || "").toLowerCase() === user &&
+    String(x.tipo || "").toUpperCase() === tipo
+  );
+  if (!u) return false;
+
+  const empUser = String(u.empresaId || "").toUpperCase();
+  if (!empUser || empUser !== empAtual) return false;
+
+  return true;
+}
+window.validarSessaoPersistida = validarSessaoPersistida;
+
+
+// ===============================
+// ✅ OCULTAR "CADASTRO/CADASTRAR MÁQUINA" PARA COLAB (GLOBAL + ANTI-REAPARECER)
+// ===============================
+
+function ocultarCadastroMaquinaParaColab() {
+  if (typeof isAdmin !== "function" || !isAdmin()) return;
+
+
+  // 1) esconde por seletores conhecidos (menu e telas)
+  const seletores = [
+    "#btnCadastrarMaquina",
+    "#colaboradores #btnCadastrarMaquina",
+    "#colaboradores .btnCadastrarMaquina",
+    "[data-btn='cadastrarMaquina']",
+    "[data-action='cadastrarMaquina']",
+    "[onclick*='cadastroMaquina']",
+    "[onclick*='salvarMaquina']"
+  ];
+
+  document.querySelectorAll(seletores.join(",")).forEach((el) => {
+    el.style.setProperty("display", "none", "important");
+  });
+
+  // 2) fallback por TEXTO (pega variações)
+  const alvos = ["CADASTRO DE MAQUINA", "CADASTRAR MAQUINA"];
+
+  document
+    .querySelectorAll("button, a, [role='button'], .btn, li, div")
+    .forEach((el) => {
+      const t = _normTxt(el.textContent || "");
+      if (alvos.some((x) => t.includes(x))) {
+        el.style.setProperty("display", "none", "important");
+      }
+    });
+}
+
+// ✅ ativa proteção: roda agora + observa mudanças no DOM
+function ativarProtecaoCadastroMaquinaColab() {
+  try { ocultarCadastroMaquinaParaColab(); } catch {}
+
+  // evita criar vários observers
+  if (window.__obsCadMaq) return;
+
+  window.__obsCadMaq = new MutationObserver(() => {
+    // só aplica se for COLAB (economiza processamento)
+    try {
+      if (!isAdmin()) ocultarCadastroMaquinaParaColab();
+    } catch {}
+  });
+
+  window.__obsCadMaq.observe(document.body, {
+    childList: true,
+    subtree: true
+  });
+}
+
+// ✅ opcional: se quiser desligar (debug)
+function desativarProtecaoCadastroMaquinaColab() {
+  try {
+    if (window.__obsCadMaq) {
+      window.__obsCadMaq.disconnect();
+      window.__obsCadMaq = null;
+    }
+    // (opcional) reexibe o botão caso tenha escondido via style
+    const el = document.getElementById("btnCadastrarMaquina");
+    if (el) el.style.removeProperty("display");
+  } catch (e) {
+    console.warn("desativarProtecaoCadastroMaquinaColab falhou:", e);
+  }
+}
+
+// se você precisar chamar pelo HTML:
+window.desativarProtecaoCadastroMaquinaColab = desativarProtecaoCadastroMaquinaColab;
+
+
+// expõe se quiser chamar manualmente
+Object.assign(window, {
+  ocultarCadastroMaquinaParaColab,
+  ativarProtecaoCadastroMaquinaColab,
+  desativarProtecaoCadastroMaquinaColab,
 });
 
 
-// deixa as funções visíveis pro onclick do HTML (porque seu script é type="module")
-window.preCadastrarEmpresa = preCadastrarEmpresa;
-window.adicionarEmpresa = adicionarEmpresa;
-window.voltar = voltar;
+function bindMenuButtons() {
+  const map = [
+    ["btnFechamentoCaixa", "abrirFechamentoCaixa"],
+    ["btnTrocarSenhaAdmin", "trocarSenhaAdmin"],
+    ["btnTrocarCredenciaisAdmin", "trocarCredenciaisAdmin"],
+    ["btnColaboradores", "abrirColaboradores"]
+  ];
+
+  map.forEach(([id, fn]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    el.onclick = (ev) => {
+      ev.preventDefault();
+
+      const f = window[fn];
+      if (typeof f !== "function") {
+        console.error(`❌ Função ${fn} não existe no window.`);
+        alert(`❌ Botão "${id}" não está ligado. Função "${fn}" não encontrada.`);
+        return;
+      }
+
+      try {
+        f();
+      } catch (e) {
+        console.error(`❌ Erro ao executar ${fn}:`, e);
+        alert(`❌ Erro ao abrir: ${fn}\n\n` + (e?.message || e));
+      }
+    };
+  });
+}
+
+// garante depois do DOM pronto
+window.addEventListener("load", () => {
+  bindMenuButtons();
+});
+
+
+// ✅ GARANTE: função que faltava (Colaboradores)
+function abrirColaboradores() {
+  if (!exigirAdmin()) return;
+  abrir("colaboradores");
+  try { listarColaboradores(); } catch(e) { console.log(e); }
+}
+window.abrirColaboradores = abrirColaboradores;
+
+
+// ✅ SUPER BIND (delegação) - nunca mais “botão não funciona”
+document.addEventListener("click", (ev) => {
+  const el = ev.target.closest(
+    "#btnFechamentoCaixa,#btnTrocarSenhaAdmin,#btnTrocarCredenciaisAdmin,#btnColaboradores"
+  );
+  if (!el) return;
+
+  ev.preventDefault();
+  ev.stopPropagation();
+
+  const map = {
+    btnFechamentoCaixa: "abrirFechamentoCaixa",
+    btnTrocarSenhaAdmin: "trocarSenhaAdmin",
+    btnTrocarCredenciaisAdmin: "trocarCredenciaisAdmin",
+    btnColaboradores: "abrirColaboradores",
+  };
+
+  const fnName = map[el.id];
+  const fn = window[fnName];
+
+  console.log("✅ Clique:", el.id, "->", fnName, "tipo:", typeof fn);
+
+  if (typeof fn !== "function") {
+    alert(`❌ Função ${fnName} não está disponível no window.`);
+    return;
+  }
+
+  try {
+    fn();
+  } catch (e) {
+    console.error(`❌ Erro em ${fnName}:`, e);
+    alert(`❌ Erro ao executar ${fnName}\n\n` + (e?.message || e));
+  }
+});
+
+
+window.toggleSenha = toggleSenha;
+
+
+async function migrarEmpresaId(oldId, newId) {
+  oldId = String(oldId || "").trim().toUpperCase();
+  newId = String(newId || "").trim().toUpperCase();
+  if (!oldId || !newId) return alert("IDs inválidos.");
+  if (oldId === newId) return alert("Old e New são iguais.");
+
+  await ensureAuth();
+
+  const oldRef = doc(db, "empresas", oldId, "dados", "app");
+  const newRef = doc(db, "empresas", newId, "dados", "app");
+
+  const oldSnap = await getDoc(oldRef);
+  if (!oldSnap.exists()) return alert("Empresa antiga não existe: " + oldId);
+
+  const data = oldSnap.data() || {};
+
+  // grava no novo ID
+  await setDoc(newRef, {
+    ...data,
+    atualizadoEm: new Date().toISOString(),
+    empresaPerfil: {
+      ...(data.empresaPerfil || {}),
+      nomeEmpresa: "EMPRESA_PRINCIPAL_ID"
+    }
+  });
+
+  // atualiza lista central (config/empresas)
+  let lista = await garantirListaEmpresas();
+  // remove old
+  lista = lista.filter(e => String(e.id || "").toUpperCase() !== oldId);
+  // adiciona new
+  if (!lista.some(e => String(e.id || "").toUpperCase() === newId)) {
+    lista.push({ id: newId, nome: "EMPRESA_PRINCIPAL_ID" });
+  } else {
+    lista = lista.map(e => String(e.id||"").toUpperCase() === newId ? { id:newId, nome:"EMPRESA_PRINCIPAL_ID" } : e);
+  }
+  await salvarListaEmpresas(lista);
+
+  // atualiza logins no índice central (config/logins)
+  // (troca empresaId de quem era oldId)
+  const logSnap = await getDoc(loginsRef());
+  if (logSnap.exists()) {
+    const logData = logSnap.data() || {};
+    const users = logData.usuarios || {};
+    const updates = {};
+
+    for (const [user, info] of Object.entries(users)) {
+      if (String(info?.empresaId || "").toUpperCase() === oldId) {
+        updates[user] = { ...info, empresaId: newId };
+      }
+    }
+
+    if (Object.keys(updates).length) {
+      await setDoc(loginsRef(), {
+        atualizadoEm: new Date().toISOString(),
+        usuarios: updates
+      }, { merge: true });
+    }
+  }
+
+  // opcional: apagar antiga
+  // await deleteDoc(oldRef);
+
+  localStorage.setItem("empresaAtualId", newId);
+
+  alert(`✅ Migração concluída!\n${oldId} → ${newId}\n\nAgora recarregue a página.`);
+}
+window.migrarEmpresaId = migrarEmpresaId;
+
+
+function debugColabs() {
+  try {
+    const emp = String(empresaAtualId || "").toUpperCase();
+    const lista = listarColaboradoresComWhats(); // já normaliza e filtra
+    console.log("=== DEBUG COLABS ===");
+    console.log("empresaAtualId:", emp);
+    console.log("total usuarios:", (usuarios || []).length);
+    console.table(
+      (usuarios || [])
+        .filter(u => String(u.tipo || "").toUpperCase() === "COLAB")
+        .map(u => ({
+          nome: u.nome,
+          user: u.user,
+          empresaId: u.empresaId,
+          whats_raw: u.whats,
+          whats_norm: normalizarWhats(u.whats),
+          ok_whats: !!normalizarWhats(u.whats)
+        }))
+    );
+
+    console.log("colabs com whats válido (da empresa atual):", lista.length);
+    console.table(lista.map(c => ({
+      nome: c.nome,
+      user: c.user,
+      empresaId: c.empresaId,
+      whats: c.whats
+    })));
+
+    alert(`✅ Debug Colabs\nEmpresa: ${emp}\nColabs com Whats válido: ${lista.length}`);
+  } catch (e) {
+    console.error("debugColabs erro:", e);
+    alert("❌ debugColabs falhou: " + (e?.message || e));
+  }
+}
+
+window.debugColabs = debugColabs;
+
+
+console.log("OK carregou script");
+console.log("fazerLogin:", typeof window.fazerLogin);
+console.log("abrirWhatsTexto:", typeof window.abrirWhatsTexto);
+
+// ✅ ALIAS: evita crash se você trocar o nome sem querer
+if (typeof window.carregarSessao !== "function") {
+  window.carregarSessao = function () {
+    try {
+      const ok = !!window.__sessao;
+      console.log("carregarSessao (alias):", ok ? "tem sessão" : "sem sessão");
+      return ok;
+    } catch (e) {
+      console.warn("carregarSessao (alias) falhou:", e);
+      return false;
+    }
+  };
+}
+
+
+window.addEventListener("load", () => {
+  try {
+    // garante empresa atual logo no começo
+    if (!empresaAtualId) {
+      const emp = localStorage.getItem("empresaAtualId") || EMPRESA_PRINCIPAL_ID;
+      setEmpresaAtual(emp);
+    }
+
+    atualizarNomeEmpresaNaTela().catch(console.error);
+  } catch (e) {
+    console.error("Falha ao setar nome no topo:", e);
+  }
+});
+
+console.count("📦 script.js avaliou");
+
+
+async function clicarSalvar() {
+  const ok = await salvarNoFirebase(true);
+  if (ok) alert("✅ Alterações salvas!");
+}
+
+
+document.addEventListener("input", (e) => {
+  if (e.target?.id === "detCpf" || e.target?.id === "detRg") {
+    const cpf = (document.getElementById("detCpf")?.value || "").trim();
+    const rg  = (document.getElementById("detRg")?.value  || "").trim();
+    const erro = document.getElementById("erroCpfRgDetalhe");
+    if (erro) erro.style.display = (!cpf && !rg) ? "block" : "none";
+  }
+});
+
+
+
+window.fcEnsureModalPct = function fcEnsureModalPct() {
+  if (document.getElementById("modalEditarPctFC")) return;
+
+  const wrap = document.createElement("div");
+  wrap.id = "modalEditarPctFC";
+  wrap.style.cssText = `
+    position:fixed !important;
+    inset:0 !important;
+    display:none;
+    align-items:center;
+    justify-content:center;
+    background:rgba(0,0,0,.65);
+    z-index:999999;
+    padding:16px;
+  `;
+
+  wrap.innerHTML = `
+    <div id="modalEditarPctFC_card" style="
+      width:min(520px, 96vw);
+      background:#0b1220;
+      color:#fff;
+      border-radius:16px;
+      padding:16px;
+      box-shadow:0 12px 40px rgba(0,0,0,.6);
+      border:1px solid rgba(255,255,255,.08);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    ">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+        <div style="font-weight:800; font-size:18px;">✏️ Editar % do cliente</div>
+        <button id="btnFecharModalPctFC" type="button" style="
+          width:36px; height:36px;
+          border-radius:10px;
+          border:1px solid rgba(255,255,255,.15);
+          background:rgba(255,255,255,.08);
+          color:#fff;
+          cursor:pointer;
+        ">✖</button>
+      </div>
+
+      <div style="margin-top:10px; opacity:.9; font-size:14px; line-height:1.3;">
+        <div id="pctFcEstab"></div>
+        <div id="pctFcPeriodo" style="margin-top:4px;"></div>
+        <div style="margin-top:8px;">Total empresa: <b id="pctFcTotal"></b></div>
+      </div>
+
+      <div style="margin-top:14px;">
+        <label style="display:block; font-size:13px; opacity:.85; margin-bottom:6px;">% novo</label>
+        <input id="pctFcNovo" type="number" min="0" max="100" step="0.01" style="
+          width:100%;
+          padding:12px;
+          border-radius:12px;
+          border:1px solid rgba(255,255,255,.15);
+          background:#0f1a2f;
+          color:#fff;
+          outline:none;
+        "/>
+      </div>
+
+      <div style="margin-top:12px; font-size:13px; opacity:.9;">
+        <div>Empresa: <b id="pctFcEmpresa"></b></div>
+        <div>A repassar: <b id="pctFcRepassar"></b></div>
+        <div>A recolher: <b id="pctFcRecolher"></b></div>
+      </div>
+
+      <div style="margin-top:16px; display:flex; gap:10px; justify-content:flex-end;">
+        <button id="btnCancelarModalPctFC" type="button" style="
+          padding:10px 14px;
+          border-radius:12px;
+          border:1px solid rgba(255,255,255,.15);
+          background:rgba(255,255,255,.06);
+          color:#fff;
+          cursor:pointer;
+        ">Cancelar</button>
+
+        <button id="btnSalvarModalPctFC" type="button" style="
+          padding:10px 14px;
+          border-radius:12px;
+          border:0;
+          background:#22c55e;
+          color:#06220f;
+          font-weight:800;
+          cursor:pointer;
+        ">Salvar</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(wrap);
+
+  // fechar clicando fora do card
+  wrap.addEventListener("click", (e) => {
+    const card = document.getElementById("modalEditarPctFC_card");
+    if (card && !card.contains(e.target)) {
+      wrap.style.display = "none";
+    }
+  });
+
+  // binds
+  document.getElementById("btnFecharModalPctFC")?.addEventListener("click", () => wrap.style.display = "none");
+  document.getElementById("btnCancelarModalPctFC")?.addEventListener("click", () => wrap.style.display = "none");
+  document.getElementById("btnSalvarModalPctFC")?.addEventListener("click", () => {
+    // aqui você chama sua função real de salvar
+    if (typeof fcSalvarPctModal === "function") fcSalvarPctModal();
+    else alert("Salvou (teste). Agora liga no fcSalvarPctModal()");
+  });
+  document.getElementById("pctFcNovo")?.addEventListener("input", () => {
+    if (typeof fcAtualizarPreviewPct === "function") fcAtualizarPreviewPct();
+  });
+};
+
+
+window.fcAbrirModalPct = function fcAbrirModalPct(estab, total) {
+  window.fcEnsureModalPct();
+
+  document.getElementById("pctFcEstab").textContent = `Estab: ${estab}`;
+  document.getElementById("pctFcPeriodo").textContent = `Período atual`; // depois você põe o período real
+  document.getElementById("pctFcTotal").textContent =
+    Number(total || 0).toLocaleString("pt-BR", { style:"currency", currency:"BRL" });
+
+  // default
+  document.getElementById("pctFcNovo").value = "";
+
+  const m = document.getElementById("modalEditarPctFC");
+  m.style.display = "flex";
+
+  console.log("✅ Modal aberto!");
+};
+
+
+// ✅ FIX DEFINITIVO - BOTÃO "Editar %" (Fechamento de Caixa)
+(function () {
+  function fcAbrirModalPctFIX(estab, total) {
+    // garante modal criado
+    if (typeof fcEnsureModalPct === "function") fcEnsureModalPct();
+
+    // permissão
+    if (typeof fcIsAdmin === "function" && !fcIsAdmin()) {
+      alert("Somente ADMIN pode editar.");
+      return;
+    }
+
+    // contexto do modal (usado no salvar/preview)
+    window.__pctCtx = {
+      estab: String(estab || "").trim(),
+      total: Number(total || 0),
+    };
+
+    // preenche infos do modal
+    const elEstab = document.getElementById("pctFcEstab");
+    const elPeriodo = document.getElementById("pctFcPeriodo");
+    const elTotal = document.getElementById("pctFcTotal");
+    const inp = document.getElementById("pctFcNovo");
+
+    if (elEstab) elEstab.textContent = `Estab: ${window.__pctCtx.estab}`;
+    if (elPeriodo) {
+      const ini = document.getElementById("fcIni")?.value || "";
+      const fim = document.getElementById("fcFim")?.value || "";
+      const modo = String(window.__fcModo || window._fcModo || "DIARIO").toUpperCase();
+      elPeriodo.textContent = `Modo: ${modo} | Período: ${ini.split("-").reverse().join("/")} até ${fim.split("-").reverse().join("/")}`;
+    }
+    if (elTotal) {
+      elTotal.textContent = (typeof fcMoney === "function")
+        ? fcMoney(window.__pctCtx.total)
+        : window.__pctCtx.total.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+    }
+
+    // carrega % atual (se já tiver override pro período)
+    const key = (typeof fcPeriodoKey === "function") ? fcPeriodoKey() : "";
+    let atual = null;
+
+    try {
+      const all = (typeof fcGetPctOverrides === "function") ? fcGetPctOverrides() : {};
+      const ovr = all[key] || {};
+      if (ovr && ovr[window.__pctCtx.estab] != null) atual = Number(ovr[window.__pctCtx.estab]);
+    } catch {}
+
+    if (inp) inp.value = (atual != null && !Number.isNaN(atual)) ? String(atual) : "";
+
+    // ✅ ABRE o modal (era isso que faltava)
+    const modal = document.getElementById("modalEditarPctFC");
+    if (modal) modal.style.display = "flex";
+
+    // atualiza preview
+    if (typeof fcAtualizarPreviewPct === "function") fcAtualizarPreviewPct();
+
+    // foco no input
+    setTimeout(() => inp?.focus?.(), 0);
+
+    console.log("✅ Modal Editar % aberto (FIX)", window.__pctCtx);
+  }
+
+  // sobrescreve TUDO (pega tanto chamada direta quanto window.)
+  window.fcAbrirModalPct = fcAbrirModalPctFIX;
+  try { fcAbrirModalPct = fcAbrirModalPctFIX; } catch {}
+})();
+
+
+// ✅ FIX: salvar/preview do modal Editar % funcionando com script type="module"
+(function () {
+  function getPctCtx() {
+    // tenta usar o __pctCtx do módulo (se existir) e cai pro window
+    try {
+      if (typeof __pctCtx !== "undefined" && __pctCtx) return __pctCtx;
+    } catch {}
+    return window.__pctCtx || null;
+  }
+
+  function setPctCtx(v) {
+    // grava nos dois lugares (módulo e window) pra não dar mais conflito
+    try { __pctCtx = v; } catch {}
+    window.__pctCtx = v;
+  }
+
+  // 🔁 garante que o AbrirModal também grava no __pctCtx certo
+  const oldAbrir = window.fcAbrirModalPct;
+  window.fcAbrirModalPct = function (estab, total) {
+    setPctCtx({ estab: String(estab || "").trim(), total: Number(total || 0) });
+    if (typeof oldAbrir === "function") return oldAbrir(estab, total);
+  };
+
+  // ✅ PREVIEW: agora funciona e preenche Empresa / A repassar / A recolher
+  window.fcAtualizarPreviewPct = function () {
+    const ctx = getPctCtx();
+    if (!ctx) return;
+
+    const pct = Number(document.getElementById("pctFcNovo")?.value || 0);
+    const total = Number(ctx.total || 0);
+
+    const repassar = Math.max(0, total * (pct / 100));
+    const empresa  = Math.max(0, total - repassar);
+    const recolher = empresa;
+
+    const money = (v) =>
+      Number(v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+    const eEmp = document.getElementById("pctFcEmpresa");
+    const eRep = document.getElementById("pctFcRepassar");
+    const eRec = document.getElementById("pctFcRecolher");
+
+    if (eEmp) eEmp.textContent = money(empresa);
+    if (eRep) eRep.textContent = money(repassar);
+    if (eRec) eRec.textContent = money(recolher);
+  };
+
+  // ✅ SALVAR: agora grava override e re-renderiza fechamento
+  window.fcSalvarPctModal = function () {
+    const ctx = getPctCtx();
+    if (!ctx) return alert("❌ Contexto do modal vazio (ctx).");
+
+    const pct = Number(document.getElementById("pctFcNovo")?.value || 0);
+    if (pct < 0 || pct > 100) return alert("Percentual inválido (0 a 100).");
+
+    const all = (typeof window.fcGetPctOverrides === "function") ? window.fcGetPctOverrides() : {};
+    const key = (typeof window.fcPeriodoKey === "function") ? window.fcPeriodoKey() : "";
+
+    if (!key) return alert("❌ Não consegui montar a chave do período (fcPeriodoKey).");
+
+    all[key] = all[key] || {};
+    all[key][ctx.estab] = pct;
+
+    if (typeof window.fcSetPctOverrides === "function") window.fcSetPctOverrides(all);
+
+    // fecha modal
+    const m = document.getElementById("modalEditarPctFC");
+    if (m) m.style.display = "none";
+
+    // limpa ctx
+    setPctCtx(null);
+
+    // re-render
+    try { window.renderFechamentoCaixa(); } catch {}
+
+    alert("✅ % do cliente atualizado nesse fechamento!");
+  };
+
+})();
+
+
+// ===============================
+// ✅ FIX FINAL: Salvar % do Fechamento (CAPTURE + localStorage)
+// ===============================
+(function () {
+  const FC_PCT_KEY = "fcPctOverride";
+
+  function periodoKey() {
+    const ini = document.getElementById("fcIni")?.value || "";
+    const fim = document.getElementById("fcFim")?.value || "";
+    const modo = String(window.__fcModo || window._fcModo || "DIARIO").toUpperCase();
+    return `${modo}|${ini}|${fim}`;
+  }
+
+  function getOverrides() {
+    try { return JSON.parse(localStorage.getItem(FC_PCT_KEY) || "{}"); }
+    catch { return {}; }
+  }
+
+  function setOverrides(obj) {
+    localStorage.setItem(FC_PCT_KEY, JSON.stringify(obj || {}));
+  }
+
+  // ✅ garante que ao abrir modal sempre existe ctx em window
+  const oldOpen = window.fcAbrirModalPct;
+  window.fcAbrirModalPct = function (estab, total) {
+    window.__pctCtx = { estab: String(estab || "").trim(), total: Number(total || 0) };
+    const r = (typeof oldOpen === "function") ? oldOpen(estab, total) : undefined;
+
+    const modal = document.getElementById("modalEditarPctFC");
+    if (modal) modal.style.display = "flex";
+
+    console.log("✅ ctx setado:", window.__pctCtx);
+    return r;
+  };
+
+  // ✅ salvar global (pra qualquer chamada)
+  window.fcSalvarPctModal = function () {
+    const ctx = window.__pctCtx;
+    if (!ctx?.estab) return alert("❌ Sem contexto do estabelecimento.");
+
+    const pct = Number(document.getElementById("pctFcNovo")?.value || 0);
+    if (!(pct >= 0 && pct <= 100)) return alert("❌ Percentual inválido (0 a 100).");
+
+    const key = periodoKey();
+    const all = getOverrides();
+
+    all[key] = all[key] || {};
+    all[key][ctx.estab] = pct;
+
+    setOverrides(all);
+
+    console.log("✅ SALVO localStorage:", FC_PCT_KEY, all);
+
+    const modal = document.getElementById("modalEditarPctFC");
+    if (modal) modal.style.display = "none";
+
+    window.__pctCtx = null;
+
+    try { window.renderFechamentoCaixa(); } catch {}
+    alert("✅ % do cliente atualizado nesse fechamento!");
+  };
+
+  // ✅ CAPTURE: pega o clique antes de qualquer stopPropagation
+  document.addEventListener("click", (ev) => {
+    const btnSalvar   = ev.target.closest("#btnSalvarModalPctFC");
+    const btnCancelar = ev.target.closest("#btnCancelarModalPctFC");
+    const btnFechar   = ev.target.closest("#btnFecharModalPctFC");
+
+    if (!btnSalvar && !btnCancelar && !btnFechar) return;
+
+    ev.preventDefault();
+    ev.stopPropagation();
+
+    if (btnSalvar) {
+      console.log("🟩 CLICK SALVAR capturado");
+      return window.fcSalvarPctModal();
+    }
+
+    if (btnCancelar || btnFechar) {
+      console.log("🟦 CLICK FECHAR/CANCELAR capturado");
+      const modal = document.getElementById("modalEditarPctFC");
+      if (modal) modal.style.display = "none";
+      return;
+    }
+  }, true);
+})();
+
+window.addEventListener("DOMContentLoaded", () => {
+  const btn = document.getElementById("btnCadastrarEmpresa");
+  if (!btn) return;
+
+  if (btn.dataset.bound === "1") return; // evita duplicar
+  btn.dataset.bound = "1";
+
+  btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    preCadastrarEmpresa();
+  });
+});
+
+// =========================================
+// 🔒 BOTÕES BLOQUEAR/DESBLOQUEAR NA LISTA
+// (Embaixo de cada "Selecionar <Empresa>")
+// =========================================
+
+function __isMaster() {
+  return String((window.sessaoUsuario && window.sessaoUsuario.tipo) || "").toUpperCase() === "MASTER";
+}
+
+function __normalizaEmpIdPorTextoSelecionar(txt) {
+  // pega "Selecionar Mini Micro" -> "MINI-MICRO"
+  const t = String(txt || "").trim();
+  const semPrefixo = t.replace(/^selecionar\s+/i, "").trim();
+  if (!semPrefixo) return "";
+
+  // usa sua normaliza se existir, senão faz fallback
+  if (typeof normalizaEmpresaId === "function") return normalizaEmpresaId(semPrefixo);
+  if (typeof normalizaEmpresaId === "function") return normalizaEmpresaId(semPrefixo);
+
+  return String(semPrefixo).trim().toUpperCase().replace(/\s+/g, "-");
+}
+
+async function __lerStatusBloqueioEmpresa(empId) {
+  try {
+    await ensureAuth();
+    const id = String(empId || "").trim().toUpperCase();
+    if (!id) return { manualBlocked: false, reason: "" };
+
+    const ref = doc(db, "empresas", id, "dados", "app");
+    const snap = await getDoc(ref);
+    const data = snap.exists() ? (snap.data() || {}) : {};
+    const perfil = (data.empresaPerfil && typeof data.empresaPerfil === "object") ? data.empresaPerfil : {};
+
+    return {
+      manualBlocked: perfil.manualBlocked === true,
+      reason: String(perfil.manualBlockedReason || "").trim(),
+    };
+  } catch (e) {
+    console.warn("__lerStatusBloqueioEmpresa erro:", e);
+    return { manualBlocked: false, reason: "" };
+  }
+}
+
+function __criarBtnAzul(txt) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.textContent = txt;
+  // estilo parecido com seus botões
+  b.style.cssText =
+    "width:100%;padding:14px;border:none;border-radius:16px;font-weight:900;cursor:pointer;" +
+    "background:#38bdf8;color:#0b1220;margin-top:8px;";
+  return b;
+}
+
+function __criarBtnVermelho(txt) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.textContent = txt;
+  b.style.cssText =
+    "width:100%;padding:14px;border:none;border-radius:16px;font-weight:900;cursor:pointer;" +
+    "background:#ef4444;color:#fff;margin-top:8px;";
+  return b;
+}
+
+function __criarStatusLinha() {
+  const s = document.createElement("div");
+  s.style.cssText = "margin-top:6px;font-weight:900;opacity:.9;font-size:12px;";
+  s.textContent = "status: carregando...";
+  return s;
+}
+
+function __textoLimpo(v) {
+  return String(v || "")
+    .toUpperCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function __extrairNomeEmpresaDoBotaoSelecionar(btn) {
+  // pega "Selecionar Mini Micro" e retorna "MINI-MICRO"
+  const bruto = String(btn?.textContent || "");
+  const limpo = __textoLimpo(bruto); // "SELECIONAR MINI MICRO"
+  if (!limpo.includes("SELECIONAR")) return "";
+
+  const nome = limpo.replace(/^SELECIONAR\s+/i, "").trim(); // "MINI MICRO"
+  if (!nome) return "";
+  return (typeof normalizaEmpresaId === "function")
+    ? normalizaEmpresaId(nome)
+    : nome.replace(/\s+/g, "-");
+}
+
+async function __injetarBloqueioEmbaixoDeCadaEmpresa() {
+  if (!__isMaster()) return;
+
+  // acha o título mesmo com emoji
+  const nodes = Array.from(document.querySelectorAll("div,span,p,h1,h2,h3,h4"));
+  const titulo = nodes.find(n => __textoLimpo(n.textContent).includes("EMPRESAS CADASTRADAS"));
+  if (!titulo) return;
+
+  // container da lista (pai do titulo normalmente)
+  let raiz = titulo.parentElement || document.body;
+
+  // pega SOMENTE os botões "Selecionar ..." originais
+  const botoes = Array.from(raiz.querySelectorAll("button"));
+
+  const selecionarBtns = botoes.filter(b => {
+    // ignora botões criados por nós
+    if (b.dataset && b.dataset.bloqbtn === "1") return false;
+
+    const t = __textoLimpo(b.textContent);
+
+    // pega só botão "Selecionar <empresa>"
+    if (!t.startsWith("SELECIONAR ")) return false;
+    if (t.includes("SELECIONAR EMPRESA")) return false; // menu
+    return true;
+  });
+
+  console.log("🔎 empresas detectadas:", selecionarBtns.length);
+
+  for (const btnSel of selecionarBtns) {
+    if (btnSel.dataset.__bloqInjected === "1") continue;
+
+    const empId = __extrairNomeEmpresaDoBotaoSelecionar(btnSel);
+    if (!empId) continue;
+
+    btnSel.dataset.__bloqInjected = "1";
+
+    const linha = btnSel.parentElement || btnSel;
+
+    // evita duplicar bloco (se já existir logo depois)
+    if (linha.nextElementSibling && linha.nextElementSibling.dataset && linha.nextElementSibling.dataset.bloqBlock === "1") {
+      continue;
+    }
+
+    const bloco = document.createElement("div");
+    bloco.dataset.bloqBlock = "1";
+    bloco.style.cssText =
+      "width:100%;margin-top:10px;padding:10px;border-radius:14px;background:rgba(0,0,0,.20);";
+
+    const status = __criarStatusLinha();
+
+    const btnBloq = __criarBtnVermelho("🔒 BLOQUEAR " + empId);
+    btnBloq.dataset.bloqbtn = "1";
+
+    const btnDes  = __criarBtnAzul("🔓 DESBLOQUEAR " + empId);
+    btnDes.dataset.bloqbtn = "1";
+
+    btnBloq.onclick = async () => {
+      const motivo = prompt("motivo do bloqueio (opcional):", "mensalidade em atraso") || "";
+      if (typeof window.masterBloquearEmpresa !== "function") return alert("❌ masterBloquearEmpresa nao existe.");
+      await window.masterBloquearEmpresa(empId, motivo);
+
+      const st = await __lerStatusBloqueioEmpresa(empId);
+      status.textContent = st.manualBlocked
+        ? ("status: 🔒 bloqueada (manual) " + (st.reason ? "- " + st.reason : ""))
+        : "status: 🟢 ativa";
+
+      btnBloq.style.display = st.manualBlocked ? "none" : "";
+      btnDes.style.display  = st.manualBlocked ? "" : "none";
+    };
+
+    btnDes.onclick = async () => {
+      if (typeof window.masterDesbloquearEmpresa !== "function") return alert("❌ masterDesbloquearEmpresa nao existe.");
+      await window.masterDesbloquearEmpresa(empId);
+
+      const st = await __lerStatusBloqueioEmpresa(empId);
+      status.textContent = st.manualBlocked
+        ? ("status: 🔒 bloqueada (manual) " + (st.reason ? "- " + st.reason : ""))
+        : "status: 🟢 ativa";
+
+      btnBloq.style.display = st.manualBlocked ? "none" : "";
+      btnDes.style.display  = st.manualBlocked ? "" : "none";
+    };
+
+    bloco.appendChild(status);
+    bloco.appendChild(btnBloq);
+    bloco.appendChild(btnDes);
+
+    try {
+      linha.insertAdjacentElement("afterend", bloco);
+    } catch {
+      try { linha.appendChild(bloco); } catch {}
+    }
+
+    // status inicial
+    const st = await __lerStatusBloqueioEmpresa(empId);
+    status.textContent = st.manualBlocked
+      ? ("status: 🔒 bloqueada (manual) " + (st.reason ? "- " + st.reason : ""))
+      : "status: 🟢 ativa";
+
+    btnBloq.style.display = st.manualBlocked ? "none" : "";
+    btnDes.style.display  = st.manualBlocked ? "" : "none";
+
+    console.log("✅ bloqueio inserido para:", empId);
+  }
+}
+
+function ligarGanchoSelecionarEmpresaParaInjetarBloqueio() {
+  if (window.__ganchoSelEmpresaLigado) return;
+  window.__ganchoSelEmpresaLigado = true;
+
+  setInterval(() => {
+    try {
+      // procura o botão do menu "Selecionar Empresa"
+      const btn = Array.from(document.querySelectorAll("#menu button, button")).find(b =>
+        String(b.textContent || "").toUpperCase().includes("SELECIONAR EMPRESA")
+      );
+
+      if (!btn) return;
+
+      // evita re-ligar várias vezes
+      if (btn.dataset.__hookBloq === "1") return;
+      btn.dataset.__hookBloq = "1";
+
+      const old = btn.onclick;
+      btn.onclick = async function (...args) {
+        // chama o clique original primeiro
+        try {
+          if (typeof old === "function") await old.apply(this, args);
+        } catch {}
+
+        // depois injeta (quando a tela abrir)
+        setTimeout(() => {
+          try { injetarBloqueioEmpresasAgora(); } catch {}
+        }, 200);
+      };
+
+      console.log("✅ gancho: Selecionar Empresa ligado");
+    } catch {}
+  }, 800);
+}
+
+// deixa pra testar no console
+window.injetarBloqueioEmpresasAgora = __injetarBloqueioEmbaixoDeCadaEmpresa;
+
+function desligarObserverBloqueioEmpresas() {
+  try {
+    if (window.__obsBloqEmpresas) {
+      window.__obsBloqEmpresas.disconnect();
+      window.__obsBloqEmpresas = null;
+    }
+  } catch {}
+}
+
+function ligarObserverBloqueioEmpresasCadastradas() {
+  if (window.__timerBloqEmpresas) return;
+
+  window.__timerBloqEmpresas = setInterval(() => {
+    try { __injetarBloqueioEmbaixoDeCadaEmpresa(); } catch {}
+  }, 800);
+
+  // roda já
+  try { __injetarBloqueioEmbaixoDeCadaEmpresa(); } catch {}
+}
+
+// deixa global pra você testar no console
+window.ligarObserverBloqueioEmpresasCadastradas = ligarObserverBloqueioEmpresasCadastradas;
+window.injetarBloqueioEmpresasAgora = __injetarBloqueioEmbaixoDeCadaEmpresa;
+
+// =====================
+// ✅ sair sem travar o botao entrar
+// =====================
+function sairDoSistema() {
+  try { pararSnapshotAtual(); } catch {}
+  try { limparSessao(); } catch {}
+  try { mostrarTelaLogin(); } catch {}
+  try { habilitarBotaoLogin(); } catch {}
+}
+
+function ligarBotaoSairAutomatico() {
+  if (window.__hookSairLigado) return;
+  window.__hookSairLigado = true;
+
+  const achar = () =>
+    Array.from(document.querySelectorAll("#menu button, button"))
+      .find(b => String(b.textContent || "").trim().toUpperCase() === "SAIR");
+
+  const btn = achar();
+  if (btn) {
+    btn.onclick = (e) => { e.preventDefault(); sairDoSistema(); };
+    return;
+  }
+
+  const obs = new MutationObserver(() => {
+    const b = achar();
+    if (b) {
+      b.onclick = (e) => { e.preventDefault(); sairDoSistema(); };
+      obs.disconnect();
+    }
+  });
+  obs.observe(document.body, { childList: true, subtree: true });
+}
+
+try { ligarBotaoSairAutomatico(); } catch {}
+
+
+
+function pedirSenhaMasterMask(msg = "🔐 Digite a senha do MASTER:") {
+  return new Promise((resolve) => {
+    // remove se já existir
+    const old = document.getElementById("modalSenhaMaster");
+    if (old) old.remove();
+
+    const wrap = document.createElement("div");
+    wrap.id = "modalSenhaMaster";
+    wrap.style.cssText = `
+      position: fixed; inset: 0; z-index: 9999999;
+      background: rgba(0,0,0,.65);
+      display: flex; align-items: center; justify-content: center;
+      padding: 16px;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    `;
+
+    wrap.innerHTML = `
+      <div style="
+        width:min(460px,96vw);
+        background:#0b1220; color:#fff;
+        border-radius:16px; padding:16px;
+        box-shadow:0 12px 40px rgba(0,0,0,.6);
+        border:1px solid rgba(255,255,255,.10);
+      ">
+        <div style="font-weight:900;font-size:16px;margin-bottom:12px;">
+          ${msg}
+        </div>
+
+        <!-- anti-autofill -->
+        <input type="text" autocomplete="username" style="position:absolute;left:-9999px;">
+        <input type="password" autocomplete="current-password" style="position:absolute;left:-9999px;">
+
+        <!-- INPUT + BOTÃO (ALINHADO) -->
+        <div style="
+          display:flex;
+          align-items:center;
+          background:#0f1a2f;
+          border:1px solid rgba(255,255,255,.15);
+          border-radius:12px;
+          padding:6px;
+          gap:6px;
+        ">
+          <input
+            id="inpSenhaMaster"
+            type="password"
+            autocomplete="new-password"
+            placeholder="Senha do MASTER"
+            style="
+              flex:1;
+              border:0;
+              background:transparent;
+              color:#fff;
+              outline:none;
+              font-size:16px;
+              padding:10px 8px;
+            "
+          />
+
+          <button
+            id="btnToggleSenhaMaster"
+            type="button"
+            style="
+              width:44px;
+              height:40px;
+              border-radius:10px;
+              border:1px solid rgba(255,255,255,.15);
+              background:rgba(255,255,255,.08);
+              color:#fff;
+              cursor:pointer;
+              display:flex;
+              align-items:center;
+              justify-content:center;
+              font-size:20px;
+            "
+            title="Mostrar / ocultar senha"
+          >👁️</button>
+        </div>
+
+        <div style="display:flex; gap:10px; margin-top:14px;">
+          <button id="btnCancSenhaMaster" type="button"
+            style="
+              flex:1;
+              padding:12px;
+              border-radius:12px;
+              border:1px solid rgba(255,255,255,.15);
+              background:rgba(255,255,255,.06);
+              color:#fff;
+              font-weight:800;
+            ">
+            Cancelar
+          </button>
+
+          <button id="btnOkSenhaMaster" type="button"
+            style="
+              flex:1;
+              padding:12px;
+              border-radius:12px;
+              border:0;
+              background:#22c55e;
+              color:#06220f;
+              font-weight:900;
+            ">
+            OK
+          </button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(wrap);
+
+    const inp = document.getElementById("inpSenhaMaster");
+    const btnEye = document.getElementById("btnToggleSenhaMaster");
+    const btnOk = document.getElementById("btnOkSenhaMaster");
+    const btnCanc = document.getElementById("btnCancSenhaMaster");
+
+    // força vazio (anti autofill)
+    inp.value = "";
+    setTimeout(() => (inp.value = ""), 100);
+
+    // 👁️ ⇄ 🐵 (IGUAL AO SEU toggleSenha)
+    btnEye.onclick = () => {
+      const mostrando = inp.type === "text";
+      inp.type = mostrando ? "password" : "text";
+      btnEye.textContent = mostrando ? "👁️" : "🐵";
+      inp.focus();
+    };
+
+    const fechar = (v) => {
+      try { wrap.remove(); } catch {}
+      resolve(v);
+    };
+
+    btnOk.onclick = () => fechar(inp.value || "");
+    btnCanc.onclick = () => fechar(null);
+
+    inp.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") fechar(inp.value || "");
+      if (e.key === "Escape") fechar(null);
+    });
+
+    wrap.addEventListener("click", (e) => {
+      const card = wrap.firstElementChild;
+      if (!card.contains(e.target)) fechar(null);
+    });
+
+    setTimeout(() => inp.focus(), 0);
+  });
+}
+
+window.pedirSenhaMasterMask = pedirSenhaMasterMask;
+
+
+document.addEventListener("DOMContentLoaded", () => {
+  ["relogioAnterior", "relogioAtual", "pix", "dinheiro", "porcentagem"].forEach(id => {
+    const campo = document.getElementById(id);
+    if (campo) {
+      campo.setAttribute("type", "number");
+      campo.setAttribute("inputmode", "decimal");
+      campo.setAttribute("step", "0.01");
+    }
+  });
+});
 
