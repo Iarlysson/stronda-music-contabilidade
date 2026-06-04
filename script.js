@@ -2033,6 +2033,11 @@ async function salvarNoFirebase(force = false) {
     // 3) espelho por máquina
     await salvarEspelhoMaquinas(safeMaquinas);
 
+    // 4) sincroniza nomes no site PIX
+    for (const maq of safeMaquinas) {
+    await sincronizarMaquinaPix(maq);
+}
+
     console.log("✅ SALVO no Firestore (docRef + backup + espelho)");
     return true;
 
