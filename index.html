@@ -89,6 +89,8 @@ body.is-master #btnTrocarCredenciaisMaster {
       <button type="button" class="btn-olho" onclick="toggleSenha('loginSenha', this)">👁️</button>
     </div>
 
+    <div style="height:12px;"></div>
+    
     <button id="btnEntrar" onclick="window.entrarLogin(document.getElementById('tipoLogin').value)">Entrar</button>
 
 
@@ -140,6 +142,7 @@ body.is-master #btnTrocarCredenciaisMaster {
   💳 Créditos Remotos 💳
 </button>
   <button onclick="abrir('status')">🟢 Status 🔴</button>
+  <button onclick="abrir('analiseDesempenho')">📊 Análise e Desempenho 📊</button>
   <button id="btnCadastrarMaquina" onclick="abrir('cadastro')">➕ Cadastrar Máquina ➕</button>
   <button onclick="abrirMaquinasCadastradas()">👥 Máquinas Cadastradas 👥</button>
   <button id="btnMaquinasDeposito" style="display:none" onclick="abrirMaquinasDeposito()">
@@ -175,13 +178,13 @@ body.is-master #btnTrocarCredenciaisMaster {
   <input id="arNum" type="text" placeholder="Ex: 001" oninput="arAutoPorNumero()">
 
   <label>Estabelecimento</label>
-  <input id="arEstab" type="text" disabled>
+  <input id="arEstab" type="text" readonly>
 
-  <label>Cliente</label>
-  <input id="arCliente" type="text" disabled>
+  <label>Relógio Atual Salvo</label>
+  <input id="arCliente" type="text" readonly>
 
-  <label>Relógio Atual</label>
-  <input id="arRelogioAtual" type="number" step="0.01" placeholder="Ex: 1250">
+  <label>Novo Relógio</label>
+  <input id="arRelogioAtual" type="number" step="0.01" placeholder="Digite o novo número do relógio">
 
   <button type="button" onclick="salvarRelogioAtualAdmin()">✅ Salvar Relógio</button>
 
@@ -189,7 +192,7 @@ body.is-master #btnTrocarCredenciaisMaster {
 </section>
 
 <div id="rotas" class="box escondido">
-  <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+   
   <h2>🗺️ Rotas</h2>
 
   <label>Nova rota</label>
@@ -201,19 +204,23 @@ body.is-master #btnTrocarCredenciaisMaster {
 
   <h3 style="margin:0 0 10px;">📋 Rotas Cadastradas</h3>
   <ul id="listaRotas"></ul>
+  <div style="height:12px;"></div>
+  <button type="button" onclick="voltar()">⬅ Voltar</button>
 </div>
 
 <div id="rotaDetalhe" class="box escondido">
-  <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+   
   <h2 id="tituloRotaDetalhe">📍 Rota</h2>
   <ul id="listaMaquinasRotaDetalhe"></ul>
+  <div style="height:12px;"></div>
+  <button type="button" onclick="voltar()">⬅ Voltar</button>
 </div>
 
 
 
     <!-- ACERTO -->
 <div id="acerto" class="box escondido" autocomplete="off">
-  <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+   
   <h2>⚡ Acerto ⚡</h2>
 
   <label>Número da Jukebox</label>
@@ -245,22 +252,152 @@ body.is-master #btnTrocarCredenciaisMaster {
   <p id="resultado"></p>
 
   <button type="button" onclick="salvarAcerto()">Salvar Acerto</button>
+
+  <div style="height:12px;"></div>
+
+  <button type="button" onclick="voltar()">⬅ Voltar</button>
+
+  
 </div>
 
     <!-- STATUS -->
     <div id="status" class="box escondido">
-      <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+       
       <h2>Status de Acertos</h2>
       <ul id="listaStatus"></ul>
+      <div style="height:12px;"></div>
+      <button type="button" onclick="voltar()">⬅ Voltar</button>
+
     </div>
 
     <!-- DETALHES DO CLIENTE -->
     <div id="detalhesStatus" class="box escondido">
-      <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+       
       <h2 id="tituloDetalhes">📊 Acertos do Mês</h2>
       <ul id="listaDetalhes"></ul>
       <p id="resumoDetalhes"></p>
+      <div style="height:12px;"></div>
+      <button type="button" onclick="voltar()">⬅ Voltar</button>
+
     </div>
+
+
+    <div id="analiseDesempenho" class="box escondido">
+  <h2>📊 Análise e Desempenho</h2>
+
+  <button type="button" onclick="abrirGraficoDesempenho()">📈 Gráfico</button>
+  <div style="height:12px;"></div>
+  <button type="button" onclick="abrirRankingDesempenho()">🏆 Ranking</button>
+  <div style="height:12px;"></div>
+  <button type="button" onclick="abrirMaquinasAtencao()">⚠️ Máquinas em Atenção</button>
+  <div style="height:12px;"></div>
+  <button type="button" onclick="abrirMaquinasSemAcerto()">🚫 Sem Acerto</button>
+
+  <div style="height:12px;"></div>
+  <button type="button" onclick="voltar()">⬅ Voltar</button>
+</div>
+
+<div id="graficoDesempenho" class="box escondido">
+  <h2>📈 Gráfico de Desempenho</h2>
+
+  <label>Ano</label>
+  <select id="gdAno" onchange="renderGraficoDesempenho()"></select>
+
+  <label>Mês</label>
+  <select id="gdMes" onchange="renderGraficoDesempenho()">
+    <option value="">Todos</option>
+    <option value="0">Jan</option>
+    <option value="1">Fev</option>
+    <option value="2">Mar</option>
+    <option value="3">Abr</option>
+    <option value="4">Mai</option>
+    <option value="5">Jun</option>
+    <option value="6">Jul</option>
+    <option value="7">Ago</option>
+    <option value="8">Set</option>
+    <option value="9">Out</option>
+    <option value="10">Nov</option>
+    <option value="11">Dez</option>
+  </select>
+
+  <div id="gdLista" style="margin-top:14px;"></div>
+
+  <div style="height:12px;"></div>
+  <button type="button" onclick="voltar()">⬅ Voltar</button>
+</div>
+
+<div id="rankingDesempenho" class="box escondido">
+  <h2>🏆 Ranking de Máquinas</h2>
+
+  <label>Ano</label>
+  <select id="rkAno" onchange="renderRankingDesempenho()"></select>
+
+  <label>Mês</label>
+  <select id="rkMes" onchange="renderRankingDesempenho()">
+    <option value="">Todos</option>
+    <option value="0">Jan</option>
+    <option value="1">Fev</option>
+    <option value="2">Mar</option>
+    <option value="3">Abr</option>
+    <option value="4">Mai</option>
+    <option value="5">Jun</option>
+    <option value="6">Jul</option>
+    <option value="7">Ago</option>
+    <option value="8">Set</option>
+    <option value="9">Out</option>
+    <option value="10">Nov</option>
+    <option value="11">Dez</option>
+  </select>
+
+  <div id="rkLista" style="margin-top:14px;"></div>
+
+  <div style="height:12px;"></div>
+  <button type="button" onclick="voltar()">⬅ Voltar</button>
+</div>
+
+
+<div id="maquinasAtencao" class="box escondido">
+  <h2>⚠️ Máquinas em Atenção</h2>
+
+  <label>Ano</label>
+  <select id="atAno" onchange="renderMaquinasAtencao()"></select>
+
+  <label>Mês</label>
+  <select id="atMes" onchange="renderMaquinasAtencao()">
+    <option value="0">Jan</option>
+    <option value="1">Fev</option>
+    <option value="2">Mar</option>
+    <option value="3">Abr</option>
+    <option value="4">Mai</option>
+    <option value="5">Jun</option>
+    <option value="6">Jul</option>
+    <option value="7">Ago</option>
+    <option value="8">Set</option>
+    <option value="9">Out</option>
+    <option value="10">Nov</option>
+    <option value="11">Dez</option>
+  </select>
+
+  <div id="atLista" style="margin-top:14px;"></div>
+
+  <div style="height:12px;"></div>
+  <button type="button" onclick="voltar()">⬅ Voltar</button>
+</div>
+
+
+<div id="maquinasSemAcerto" class="box escondido">
+  <h2>🚫 Máquinas Sem Acerto</h2>
+
+  <label>Até a data</label>
+  <input id="saData" type="date" onchange="renderMaquinasSemAcerto()">
+
+  <div id="saLista" style="margin-top:14px;"></div>
+
+  <div style="height:12px;"></div>
+  <button type="button" onclick="voltar()">⬅ Voltar</button>
+</div>
+
+
 
     <!-- CADASTRO -->
 <div id="cadastro" class="box escondido">
@@ -270,20 +407,22 @@ body.is-master #btnTrocarCredenciaisMaster {
   <input id="numMaquina" type="text" autocomplete="off" inputmode="numeric" placeholder="Ex: 001">
 
   <button type="button" onclick="salvarMaquina()">Salvar</button>
-  <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar ao Menu</button>
+  <div style="height:12px;"></div>
+  <button type="button" onclick="voltar()">⬅ Voltar</button>
 </div>
 
     <!-- CLIENTES -->
     <div id="clientes" class="box escondido">
       <h2 id="tituloMaquinas">👥 Máquinas Cadastradas</h2>
       <ul id="listaMaquinas"></ul>
-      <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+      <div style="height:12px;"></div>
+       <button type="button" onclick="voltar()">⬅ Voltar</button>
     </div>
 
 
   <!-- FECHAMENTO DE CAIXA (ADMIN) -->
 <section class="box escondido" id="fechamentoCaixa">
-  <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+   
   <h2>📊 Fechamento de Caixa (Empresa)</h2>
 
   <!-- BOTÕES: DIÁRIO / MENSAL -->
@@ -295,6 +434,7 @@ body.is-master #btnTrocarCredenciaisMaster {
     <button id="btnFCMensal" type="button" style="flex:1; padding:12px; border-radius:12px; font-weight:900;">
       🗓️ Mensal
     </button>
+    
   </div>
 
   <!-- PERÍODO (em cima) -->
@@ -312,6 +452,8 @@ body.is-master #btnTrocarCredenciaisMaster {
     <button id="btnFCGerar" type="button" style="height:42px; align-self:flex-end;">
       🔄 Gerar
     </button>
+    <div style="height:12px;"></div>
+    <button type="button" onclick="voltar()">⬅ Voltar</button>
   </div>
 
   <div id="fcResumo" style="margin-top:12px;"></div>
@@ -378,8 +520,12 @@ body.is-master #btnTrocarCredenciaisMaster {
       <label>% base do cliente</label>
       <input id="detPorcBase" type="number" placeholder="Ex: 30" min="0" max="100" step="0.01">
 
-      <label>ID PIX DA HEROKU</label>
-      <input id="detPixMaquinaId" type="text" placeholder="Cole aqui o ID da máquina do sistema PIX">
+      <label for="detPixMaquinaId">ID PIX DA HEROKU</label>
+<input
+  type="text"
+  id="detPixMaquinaId"
+  placeholder="Cole aqui o ID da máquina PIX"
+/>
 
       <div class="acoes-telefone">
         <button type="button" onclick="ligarTelefone()">📞 Ligar</button>
@@ -413,15 +559,16 @@ body.is-master #btnTrocarCredenciaisMaster {
 
       <button id="btnSalvar" onclick="salvarAlteracoesMaquina()">Salvar Alterações</button>
       <button id="btnApagar" class="btn-danger" onclick="apagarMaquina()">🗑 Apagar Máquina (ADMIN)</button>
-
-      <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar ao Menu</button>
+      <div style="height:12px;"></div>
+      <button type="button" onclick="voltar()">⬅ Voltar</button>
+      
     </div>
 
 
 
      <!-- COLABORADORES (ADMIN) -->
 <div id="colaboradores" class="box escondido">
-  <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+   
   <h2>👤 Colaboradores (ADMIN)</h2>
 
   <label>Nome do Colaborador</label>
@@ -443,6 +590,8 @@ body.is-master #btnTrocarCredenciaisMaster {
 <input id="empresaIdAtual" type="hidden" value="">
 
   <button type="button" onclick="adicionarColaborador()">➕ Adicionar Colaborador</button>
+  <div style="height:12px;"></div>
+  <button type="button" onclick="voltar()">⬅ Voltar</button>
 
   <hr style="opacity:.2; margin:16px 0;">
 
@@ -452,7 +601,7 @@ body.is-master #btnTrocarCredenciaisMaster {
 
 <!-- SELECIONAR EMPRESA (ADMIN) -->
 <div id="selecionarEmpresa" class="box escondido">
-  <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+   
   <h2>🏢 Empresas</h2>
 
   
@@ -495,11 +644,10 @@ body.is-master #btnTrocarCredenciaisMaster {
     <input id="pcDiaPagamento" type="number" min="1" max="28" value="5" />
 
     <button id="btnPreCadastrarEmpresa" type="button" onclick="preCadastrarEmpresa()">➕ Cadastrar Empresa</button>
+    <div style="height:12px;"></div>
+    <button type="button" onclick="voltar()">⬅ Voltar</button>
 
-
-
-
-  </div>
+    </div>
 
   <h3 style="margin:0 0 10px;">📋 Empresas cadastradas</h3>
   <ul id="listaEmpresas"></ul>
@@ -509,8 +657,7 @@ body.is-master #btnTrocarCredenciaisMaster {
 
     <!-- OCORRÊNCIAS -->
     <div id="ocorrencias" class="box escondido">
-      <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
-
+       
       <h2>🛠 Ocorrências 🛠</h2>
 
       
@@ -525,6 +672,8 @@ body.is-master #btnTrocarCredenciaisMaster {
         style="width:100%; padding:10px; border-radius:10px; border:none; margin-top:6px;"></textarea>
 
       <button type="button" onclick="salvarOcorrencia()">Salvar Ocorrência</button>
+      <div style="height:12px;"></div>
+      <button type="button" onclick="voltar()">⬅ Voltar</button>
 
       <hr style="opacity:.2; margin:16px 0;">
 
@@ -534,14 +683,14 @@ body.is-master #btnTrocarCredenciaisMaster {
 
 
   <div id="creditosRemotos" class="box escondido">
-  <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+   
   <h2>💳 Créditos Remotos</h2>
 
   <label>Nº da Máquina</label>
   <input id="crNum" type="text" placeholder="Ex: 12" oninput="crAutoPorNumero()" />
 
   <label>Estabelecimento</label>
-  <input id="crEstab" type="text" disabled />
+  <input id="crEstab" type="text" readonly />
 
   <p id="crInfo" style="margin:10px 0; opacity:.9;"></p>
 
@@ -549,14 +698,17 @@ body.is-master #btnTrocarCredenciaisMaster {
   <input id="crValor" type="number" step="0.01" placeholder="Ex: 50" />
 
   <button type="button" onclick="salvarCreditoRemoto()">✅ Lançar Crédito</button>
-</div>
+  <div style="height:12px;"></div>
+  <button type="button" onclick="voltar()">⬅ Voltar</button>
+
+  </div>
 
 
 
 
     <!-- LOCALIZAÇÃO -->
 <div id="localizacao" class="box escondido">
-  <button class="voltar btn-voltar" onclick="voltar()">⬅ Voltar</button>
+   
   <h2>📍 Localização das Máquinas</h2>
 
   <p style="opacity:.9; margin-top:0;">
@@ -567,6 +719,9 @@ body.is-master #btnTrocarCredenciaisMaster {
   <ul id="listaLocais"></ul>
 
   <div id="painelLocal" style="margin-top:12px;"></div>
+  <div style="height:12px;"></div>
+  <button type="button" onclick="voltar()">⬅ Voltar</button>
+
 </div>
 
     <!-- HISTÓRICO DE VENDAS (AGORA NO LUGAR CERTO) -->
@@ -616,7 +771,5 @@ body.is-master #btnTrocarCredenciaisMaster {
 
 </body>
 </html>
-
-
 
 

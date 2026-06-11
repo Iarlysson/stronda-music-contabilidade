@@ -1525,13 +1525,24 @@ async function atualizarStatus() {
     return !st.includes("DEP");
   });
 
-  // 1 por estabelecimento
   const unicos = new Map();
-  ativas.forEach(m => {
-    const key = String(m.estab || "").toUpperCase().trim();
-    if (!key) return;
-    if (!unicos.has(key)) unicos.set(key, m);
-  });
+
+ativas.forEach(m => {
+  const key = String(m.estab || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase();
+
+  if (!key) return;
+
+  if (!unicos.has(key)) {
+    unicos.set(key, m);
+  }
+});
+
+console.log("STATUS UNICOS:", [...unicos.keys()]);
 
   const lista = [...unicos.values()];
   lista.sort((a, b) => numJB(a.numero) - numJB(b.numero));
