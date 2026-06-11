@@ -249,7 +249,6 @@ async function cadastrarMaquina(dados = {}) {
     cliente: "",
     endereco: "",
     porcBase: 0,
-    pixMaquinaId: "",
     ddd: "",
     tel: "",
     foneFormatado: "",
@@ -1020,9 +1019,6 @@ async function garantirDocExiste() {
 let ocorrencias = [];
 let maquinas = [];
 let acertos = [];
-let inicioPixAtual = "";
-let fimPixAtual = "";
-let pixMaquinaIdAtual = "";
 let usuarios = [];
 let rotas = [];
 let sessaoUsuario = null;
@@ -1062,7 +1058,7 @@ function crAutoPorNumero() {
   estabEl.value = String(m.estab || "").toUpperCase();
 
   const ult = m.ultimoRelogio != null ? Number(m.ultimoRelogio) : 0;
-  if (info) info.innerHTML = `📌 Último relógio atual: <b>${ult.toFixed(2)}</b>`;
+ if (info) info.innerHTML = `📌 Último relógio atual: <b>${Math.round(ult)}</b>`;
 }
 
 function pararSnapshotAtual() {
@@ -1484,7 +1480,7 @@ function abrirAcertosDoEstabelecimentoNoMes(estabKey, jbNum) {
 
 
 
-function atualizarStatus() {
+async function atualizarStatus() {
   const listaStatus = document.getElementById("listaStatus");
   if (!listaStatus) return;
 
@@ -1552,7 +1548,7 @@ function atualizarStatus() {
 
   let totalVerdes = 0;
 
-  lista.forEach((m) => {
+  for (const m of lista) {
     const estabKey = String(m.estab || "").toUpperCase().trim();
 
     const teveAcerto = (acertos || []).some((a) => {
@@ -1564,14 +1560,7 @@ function atualizarStatus() {
       );
     });
 
-    const alugadaEm = m.alugadaEm ? new Date(m.alugadaEm) : null;
-
-const alugadaNesteMes =
-  alugadaEm &&
-  alugadaEm.getMonth() === mesAtual &&
-  alugadaEm.getFullYear() === anoAtual;
-
-if (teveAcerto || alugadaNesteMes) totalVerdes++;
+    if (teveAcerto) totalVerdes++;
 
     const lat = m.lat ?? m.latitude ?? null;
     const lng = m.lng ?? m.longitude ?? null;
@@ -1583,7 +1572,7 @@ if (teveAcerto || alugadaNesteMes) totalVerdes++;
     li.style.background = "#0f172a";
     li.style.cursor = "pointer";
     li.style.marginBottom = "10px";
-    li.style.padding = "14px 44px 14px 14px";
+    li.style.padding = "14px 88px 14px 14px";
 
     // ✅ clique no card = abrir acertos do mês
     li.addEventListener("click", () => {
@@ -1596,7 +1585,7 @@ if (teveAcerto || alugadaNesteMes) totalVerdes++;
     linha.style.gap = "10px";
 
     const bol = document.createElement("span");
-    bol.textContent = (teveAcerto || alugadaNesteMes) ? "🟢" : "🔴";
+    bol.textContent = teveAcerto ? "🟢" : "🔴";
 
     const nome = document.createElement("span");
     nome.textContent = estabKey;
@@ -1621,7 +1610,7 @@ if (teveAcerto || alugadaNesteMes) totalVerdes++;
 
       // posição
       pin.style.position = "absolute";
-      pin.style.right = "10px";
+      pin.style.right = "34px";
       pin.style.top = "50%";
       pin.style.transform = "translateY(-50%)";
 
@@ -1649,8 +1638,36 @@ if (teveAcerto || alugadaNesteMes) totalVerdes++;
       li.appendChild(pin);
     }
 
-    listaStatus.appendChild(li);
-  });
+
+const dadosHeroku = await buscarStatusHerokuMaquina(m.pixMaquinaId);
+const statusHeroku = calcularStatusHeroku(dadosHeroku);
+
+const bolHeroku = document.createElement("button");
+bolHeroku.type = "button";
+bolHeroku.title = "Status Heroku";
+bolHeroku.style.position = "absolute";
+bolHeroku.style.right = "10px";
+bolHeroku.style.top = "50%";
+bolHeroku.style.transform = "translateY(-50%)";
+bolHeroku.style.width = "16px";
+bolHeroku.style.height = "16px";
+bolHeroku.style.borderRadius = "50%";
+bolHeroku.style.border = "none";
+bolHeroku.style.padding = "0";
+bolHeroku.style.cursor = "pointer";
+bolHeroku.style.background = corBolinhaHeroku(statusHeroku);
+
+bolHeroku.onclick = (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  abrirInfoHerokuStatus(m, dadosHeroku);
+};
+
+li.appendChild(bolHeroku);
+
+   
+  listaStatus.appendChild(li);
+}
 
   const totalLista = lista.length;
   const totalVermelhas = totalLista - totalVerdes;
@@ -1664,6 +1681,7 @@ if (teveAcerto || alugadaNesteMes) totalVerdes++;
 
 
 // salvar crédito remoto: soma no relógio anterior (ultimoRelogio)
+
 async function salvarCreditoRemoto() {
   if (!exigirAdmin()) return;
 
@@ -1676,36 +1694,71 @@ async function salvarCreditoRemoto() {
   const m = maquinas.find(x => String(x.numero || "").toUpperCase() === num);
   if (!m) return alert("❌ Máquina não encontrada.");
 
+  if (!m.pixMaquinaId) {
+    return alert("❌ Essa máquina não tem ID PIX DA HEROKU cadastrado.");
+  }
+
   const atual = m.ultimoRelogio != null ? Number(m.ultimoRelogio) : 0;
   const novo = atual + valor;
 
-  m.ultimoRelogio = novo;
+  try {
+    const resp = await fetch("https://stronda-music-pix-v4-47b3ce8502e4.herokuapp.com/credito-remoto-contabilidade", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        id: m.pixMaquinaId,
+        valor: String(valor)
+      })
+    });
 
-  if (!Array.isArray(m.creditosRemotos)) m.creditosRemotos = [];
-  m.creditosRemotos.push({
-    id: Date.now(),
-    valor,
-    antes: atual,
-    depois: novo,
-    data: new Date().toISOString(),
-  });
+    const retorno = await resp.json().catch(() => ({}));
 
-  const ok = await salvarNoFirebase(true);
-  if (!ok) return;
+    if (!resp.ok) {
+      const msg = retorno.error || retorno.msg || retorno.retorno || "MÁQUINA OFFLINE!";
+      alert("❌ " + msg + "\n\nO relógio NÃO foi alterado.");
+      return;
+    }
 
-  alert(`✅ Crédito remoto lançado!\n\n${m.estab}\nJB Nº ${m.numero}\n\nRelógio: ${atual.toFixed(2)} → ${novo.toFixed(2)}`);
+    m.ultimoRelogio = novo;
 
-  // limpar campos
-  const crNum = document.getElementById("crNum");
-  const crEstab = document.getElementById("crEstab");
-  const crValor = document.getElementById("crValor");
-  const crInfo = document.getElementById("crInfo");
+    if (!Array.isArray(m.creditosRemotos)) m.creditosRemotos = [];
+    m.creditosRemotos.push({
+      id: Date.now(),
+      valor,
+      antes: atual,
+      depois: novo,
+      pixMaquinaId: m.pixMaquinaId,
+      data: new Date().toISOString(),
+    });
 
-  if (crNum) crNum.value = "";
-  if (crEstab) crEstab.value = "";
-  if (crValor) crValor.value = "";
-  if (crInfo) crInfo.textContent = "";
+    const ok = await salvarNoFirebase(true);
+    if (!ok) return;
+
+    alert(
+      `✅ Crédito remoto lançado!\n\n` +
+      `${m.estab}\nJB Nº ${m.numero}\n\n` +
+      `Heroku: crédito enviado\n` +
+      `Relógio: ${atual.toFixed(2)} → ${novo.toFixed(2)}`
+    );
+
+    const crNum = document.getElementById("crNum");
+    const crEstab = document.getElementById("crEstab");
+    const crValor = document.getElementById("crValor");
+    const crInfo = document.getElementById("crInfo");
+
+    if (crNum) crNum.value = "";
+    if (crEstab) crEstab.value = "";
+    if (crValor) crValor.value = "";
+    if (crInfo) crInfo.textContent = "";
+
+  } catch (e) {
+    console.error("❌ Erro em salvarCreditoRemoto:", e);
+    alert("❌ Erro ao enviar crédito remoto. O relógio NÃO foi alterado.");
+  }
 }
+
 
 
 function definirEmpresa(){
@@ -1975,6 +2028,222 @@ async function validarSalvamentoNaoDestrutivo(safeMaquinas, force = false) {
 }
 
 
+async function sincronizarMaquinaPix(maquina) {
+  try {
+    if (!maquina || !maquina.pixMaquinaId) return;
+
+    const numero = String(maquina.numero || "").trim();
+    const status = String(maquina.status || "").toUpperCase();
+
+    let nomePix;
+    let descricaoPix = `Maquina ${numero}`;
+
+    if (status.includes("DEP")) {
+      nomePix = `DEPOSITO STRONDA MUSIC ${numero}`;
+    } else {
+      nomePix = String(maquina.estab || "")
+        .trim()
+        .toUpperCase();
+    }
+
+    if (!nomePix || !numero) return;
+
+    await fetch(`https://stronda-music-pix-v4-47b3ce8502e4.herokuapp.com/sincronizar-maquina-contabilidade/${maquina.pixMaquinaId}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        nome: nomePix,
+        descricao: descricaoPix
+      })
+    });
+
+    console.log("✅ Máquina PIX sincronizada:", nomePix, descricaoPix);
+  } catch (e) {
+    console.error("❌ Erro ao sincronizar máquina PIX:", e);
+  }
+}
+
+window.sincronizarMaquinaPix = sincronizarMaquinaPix;
+
+
+async function zerarPagamentosHeroku(maquina) {
+  try {
+    if (!maquina || !maquina.pixMaquinaId) {
+      console.warn("⚠️ Sem pixMaquinaId, não zerou Heroku:", maquina);
+      return false;
+    }
+
+    const resp = await fetch(
+      `https://stronda-music-pix-v4-47b3ce8502e4.herokuapp.com/zerar-pagamentos-contabilidade/${maquina.pixMaquinaId}`,
+      {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json"
+        }
+      }
+    );
+
+    const texto = await resp.text();
+
+    if (!resp.ok) {
+      console.error("❌ Erro ao zerar Heroku:", texto);
+      return false;
+    }
+
+    console.log("✅ Heroku zerada/removida para próximo acerto:", texto);
+    return true;
+  } catch (e) {
+    console.error("❌ Erro em zerarPagamentosHeroku:", e);
+    return false;
+  }
+}
+
+
+async function buscarPixAcertoHeroku(pixMaquinaId, inicio, fim) {
+  const resp = await fetch(
+    `https://stronda-music-pix-v4-47b3ce8502e4.herokuapp.com/total-pix-acerto/${pixMaquinaId}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        inicio,
+        fim
+      })
+    }
+  );
+
+  const texto = await resp.text();
+
+  if (!resp.ok) {
+    throw new Error(`Erro ao buscar PIX na Heroku: ${texto}`);
+  }
+
+  let data = {};
+  try {
+    data = JSON.parse(texto);
+  } catch {
+    throw new Error(`Resposta inválida da Heroku: ${texto}`);
+  }
+
+  return Number(data.total || data.totalPix || 0);
+}
+
+
+let __cacheStatusHerokuPorMaquina = new Map();
+
+async function buscarStatusHerokuMaquina(pixMaquinaId) {
+  try {
+    pixMaquinaId = String(pixMaquinaId || "").trim();
+    if (!pixMaquinaId) return null;
+
+    const cache = __cacheStatusHerokuPorMaquina.get(pixMaquinaId);
+    if (cache && Date.now() - cache.at < 30000) {
+      return cache.data;
+    }
+
+    const resp = await fetch(
+      `https://stronda-music-pix-v4-47b3ce8502e4.herokuapp.com/teste-maquina/${pixMaquinaId}`
+    );
+
+    const data = await resp.json().catch(() => null);
+
+    if (!resp.ok || !data) return null;
+
+    __cacheStatusHerokuPorMaquina.set(pixMaquinaId, {
+      at: Date.now(),
+      data
+    });
+
+    return data;
+  } catch (e) {
+    console.warn("Erro ao buscar status Heroku:", e);
+    return null;
+  }
+}
+
+function calcularStatusHeroku(h) {
+  if (!h || !h.ultimaRequisicao) return "OFFLINE";
+
+  const agora = Date.now();
+  const ultimaReq = new Date(h.ultimaRequisicao).getTime();
+  const ultimoPix = h.ultimoPagamentoRecebido
+    ? new Date(h.ultimoPagamentoRecebido).getTime()
+    : 0;
+
+  const online = agora - ultimaReq <= 60 * 1000;
+  const pixRecente = online && ultimoPix && agora - ultimoPix <= 15 * 60 * 1000;
+
+  if (pixRecente) return "PAGAMENTO_RECENTE";
+  if (online) return "ONLINE";
+  return "OFFLINE";
+}
+
+function corBolinhaHeroku(status) {
+  if (status === "PAGAMENTO_RECENTE") return "#00bfff"; // azul
+  if (status === "ONLINE") return "#00ff40";           // verde
+  return "#ff3030";                                    // vermelho
+}
+
+
+async function buscarUltimosPixMaquina(pixMaquinaId) {
+  try {
+    pixMaquinaId = String(pixMaquinaId || "").trim();
+    if (!pixMaquinaId) return [];
+
+    const resp = await fetch(
+      `https://stronda-music-pix-v4-47b3ce8502e4.herokuapp.com/ultimos-pix-maquina/${pixMaquinaId}`
+    );
+
+    const data = await resp.json().catch(() => []);
+    if (!resp.ok || !Array.isArray(data)) return [];
+
+    return data;
+  } catch (e) {
+    console.warn("Erro ao buscar últimos PIX:", e);
+    return [];
+  }
+}
+
+
+async function abrirInfoHerokuStatus(maquina, h) {
+  const status = calcularStatusHeroku(h);
+  const ultimosPix = await buscarUltimosPixMaquina(maquina.pixMaquinaId);
+
+  let textoPix = "";
+
+  if (!ultimosPix.length) {
+    textoPix = "Nenhum PIX encontrado.";
+  } else {
+    textoPix = ultimosPix.map((p) => {
+      const valor = Number(String(p.valor || "0").replace(",", "."));
+      const dataHora = p.data
+  ? new Date(p.data).toLocaleString("pt-BR", {
+      day: "2-digit",
+      month: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit"
+    })
+  : "-";
+
+      return `💰 R$ ${valor.toFixed(2).replace(".", ",")} - ${dataHora}`;
+    }).join("\n");
+  }
+
+  alert(
+  `STATUS HEROKU\n` +
+  `${String(maquina.estab || "").toUpperCase()}\n` +
+  `JB Nº ${String(maquina.numero || "").toUpperCase()}\n` +
+  `Status: ${status}\n` +
+  `────────────\n` +
+  `Últimos PIX\n` +
+  `${textoPix}`
+);
+}
+
 
 // ✅ FILA GLOBAL DE SALVAMENTO (não precisa mudar o resto do código)
 let __saveQueue = Promise.resolve();
@@ -2031,15 +2300,12 @@ async function salvarNoFirebase(force = false) {
     await setDoc(docRef, payload, { merge: true });
 
     // 3) espelho por máquina
-    await salvarEspelhoMaquinas(safeMaquinas);
+await salvarEspelhoMaquinas(safeMaquinas);
 
-    // 4) sincroniza nomes no site PIX
-    for (const maq of safeMaquinas) {
-    await sincronizarMaquinaPix(maq);
-}
 
-    console.log("✅ SALVO no Firestore (docRef + backup + espelho)");
-    return true;
+console.log("✅ SALVO no Firestore (docRef + backup + espelho + PIX)");
+return true;
+
 
   } catch (e) {
     console.error("❌ ERRO AO SALVAR (Firestore):", e);
@@ -2586,14 +2852,20 @@ function aplicarPermissoesUI() {
   if (!rAnt) return;
 
   if (!isAdmin()) {
-    rAnt.disabled = true;
-    rAnt.style.opacity = "0.6";
-    rAnt.style.cursor = "not-allowed";
+    // colaborador vê mas não altera
+    rAnt.readOnly = true;
+    rAnt.style.opacity = "1";
+    rAnt.style.cursor = "default";
     rAnt.title = "Somente ADMIN pode alterar o Relógio Anterior";
 
-    rAnt.onclick = () => alert("❌ Somente o ADMIN pode alterar o Relógio Anterior.");
+    rAnt.onclick = () => {
+      alert("❌ Somente o ADMIN pode alterar o Relógio Anterior.");
+    };
+
   } else {
-    rAnt.disabled = false;
+
+    // admin pode editar normalmente
+    rAnt.readOnly = false;
     rAnt.style.opacity = "1";
     rAnt.style.cursor = "text";
     rAnt.title = "";
@@ -3766,7 +4038,6 @@ function acharMaquinaPorCampos() {
   return maquina || null;
 }
 
-// AUTO PELO NÚMERO
 async function autoPorNumero() {
   const campoNum = $("numAcerto");
   const campoEstab = $("estabAcerto");
@@ -3774,8 +4045,6 @@ async function autoPorNumero() {
   const pixEl = $("pix");
 
   if (!campoNum || !campoEstab) return;
-
-  aplicarPermissaoPixAcerto();
 
   campoNum.value = campoNum.value.toUpperCase();
 
@@ -3785,100 +4054,125 @@ async function autoPorNumero() {
     campoEstab.value = "";
     if (rAnt) rAnt.value = "";
     if (pixEl) pixEl.value = "";
-
-    inicioPixAtual = "";
-    fimPixAtual = "";
-    pixMaquinaIdAtual = "";
-
-    limparPorcentagemAcerto();
-    atualizarPreviewAcerto();
+    limparPorcentagemAcerto?.();
+    atualizarPreviewAcerto?.();
     return;
   }
 
-  const maquina = maquinas.find(
+  const maquina = (maquinas || []).find(
     (m) => String(m.numero || "").toUpperCase() === numeroDigitado
   );
 
-  if (maquina) {
-    campoEstab.value = String(maquina.estab || "").toUpperCase();
-
-    if (rAnt) {
-      rAnt.value = maquina.ultimoRelogio != null ? String(maquina.ultimoRelogio) : "";
-    }
-
-    percAcertoTravadoPeloUser = false;
-    aplicarPorcBaseNoAcerto(maquina);
-
-    inicioPixAtual = "";
-    fimPixAtual = "";
-    pixMaquinaIdAtual = "";
-
-    if (pixEl && maquina.pixMaquinaId) {
-      try {
-        pixEl.value = "";
-
-        const ultimoAcerto = [...(acertos || [])]
-          .filter(a =>
-            String(a.numero || "").toUpperCase() === String(maquina.numero || "").toUpperCase()
-          )
-          .sort((a, b) => new Date(b.data) - new Date(a.data))[0];
-
-        const inicio = ultimoAcerto?.data || "2026-01-01T00:00:00.000Z";
-        const fim = new Date().toISOString();
-
-        inicioPixAtual = inicio;
-        fimPixAtual = fim;
-        pixMaquinaIdAtual = maquina.pixMaquinaId || "";
-
-        pixEl.value = "buscando...";
-
-        const totalPix = await buscarPixAcertoHeroku(maquina.pixMaquinaId, inicio, fim);
-
-        pixEl.value = totalPix.toFixed(2);
-        aplicarPermissaoPixAcerto();
-        atualizarPreviewAcerto();
-
-        console.log("✅ PIX automático:", totalPix, "início:", inicio, "fim:", fim);
-
-      } catch (e) {
-        console.error("❌ Erro ao buscar PIX automático:", e);
-        pixEl.value = "";
-        inicioPixAtual = "";
-        fimPixAtual = "";
-        pixMaquinaIdAtual = "";
-        alert("❌ Não consegui buscar o PIX automático dessa máquina.");
-      }
-    } else {
-      if (pixEl) pixEl.value = "";
-    }
-
-  } else {
+  if (!maquina) {
     campoEstab.value = "";
     if (rAnt) rAnt.value = "";
     if (pixEl) pixEl.value = "";
-
-    inicioPixAtual = "";
-    fimPixAtual = "";
-    pixMaquinaIdAtual = "";
-
-    limparPorcentagemAcerto();
+    limparPorcentagemAcerto?.();
+    atualizarPreviewAcerto?.();
+    return;
   }
 
-  aplicarPermissaoPixAcerto();
-  atualizarPreviewAcerto();
+  // Nome do estabelecimento
+  campoEstab.value = String(maquina.estab || "").toUpperCase();
+
+  // Relógio anterior
+  if (rAnt) {
+    rAnt.value =
+      maquina.ultimoRelogio != null
+        ? String(maquina.ultimoRelogio)
+        : "";
+  }
+
+  // % cliente
+  try {
+    percAcertoTravadoPeloUser = false;
+    aplicarPorcBaseNoAcerto(maquina);
+  } catch (e) {
+    console.warn("Porcentagem não aplicada:", e);
+  }
+
+  // PIX automático
+  if (pixEl) {
+    pixEl.value = "";
+
+    if (maquina.pixMaquinaId) {
+      try {
+        pixEl.value = "Buscando...";
+
+        const ultimoAcerto = [...(acertos || [])]
+          .filter(
+            (a) =>
+              String(a.numero || "").toUpperCase() ===
+              String(maquina.numero || "").toUpperCase()
+          )
+          .sort((a, b) => new Date(b.data) - new Date(a.data))[0];
+
+        const inicio =
+          ultimoAcerto?.data || "2025-01-01T00:00:00.000Z";
+
+        const fim = new Date().toISOString();
+
+        console.log("🔍 PIX", {
+          maquina: maquina.numero,
+          pixMaquinaId: maquina.pixMaquinaId,
+          inicio,
+          fim
+        });
+
+        const totalPix = await buscarPixAcertoHeroku(
+          maquina.pixMaquinaId,
+          inicio,
+          fim
+        );
+
+        pixEl.value = Math.round(Number(totalPix || 0));
+
+        aplicarPermissaoPixAcerto();
+
+        console.log(
+          "✅ PIX carregado:",
+          maquina.numero,
+          totalPix
+        );
+
+      } catch (e) {
+        console.error("❌ Erro ao buscar PIX:", e);
+        pixEl.value = "0";
+      }
+    } else {
+      console.warn(
+        "⚠️ Máquina sem pixMaquinaId:",
+        maquina.numero
+      );
+
+      pixEl.value = "0";
+    }
+  }
+
+  atualizarPreviewAcerto?.();
 }
 
+function aplicarPermissaoPixMaquinaId() {
+  const detPixMaquinaId = document.getElementById("detPixMaquinaId");
+  if (!detPixMaquinaId) return;
 
-function aplicarPermissaoPixAcerto() {
-  const pixEl = document.getElementById("pix");
-  if (!pixEl) return;
-
-  const admin = typeof isAdmin === "function" && isAdmin();
-
-  pixEl.readOnly = !admin;
-  pixEl.style.opacity = admin ? "1" : "0.75";
+  if (typeof isAdmin === "function" && isAdmin()) {
+    detPixMaquinaId.readOnly = false;
+    detPixMaquinaId.disabled = false;
+    detPixMaquinaId.style.setProperty("background-color", "#ffffff", "important");
+    detPixMaquinaId.style.setProperty("color", "#000000", "important");
+    detPixMaquinaId.style.setProperty("cursor", "text", "important");
+    detPixMaquinaId.title = "";
+  } else {
+    detPixMaquinaId.readOnly = true;
+    detPixMaquinaId.disabled = true;
+    detPixMaquinaId.style.setProperty("background-color", "#4b5563", "important");
+    detPixMaquinaId.style.setProperty("color", "#ffffff", "important");
+    detPixMaquinaId.style.setProperty("border", "1px solid #6b7280", "important");
+    detPixMaquinaId.style.setProperty("cursor", "not-allowed", "important");
+    detPixMaquinaId.title = "Somente administrador pode alterar";
+  }
 }
-
 
 // AUTO PELO ESTABELECIMENTO
 function autoPorEstab() {
@@ -3919,7 +4213,6 @@ function autoPorEstab() {
   atualizarPreviewAcerto();
 }
 
-
 /* ===== Preview (mostra valores antes de salvar) ===== */
 function atualizarPreviewAcerto() {
   const resultado = $("resultado");
@@ -3950,14 +4243,21 @@ function atualizarPreviewAcerto() {
 
   const diff = arred2(empresaV - pixV);
   let saidaTexto = "";
-  if (diff > 0) saidaTexto = `💰 Valor em espécie a recolher: R$ ${diff.toFixed(2)}`;
-  else if (diff < 0) saidaTexto = `💸 Repassar ao cliente: R$ ${Math.abs(diff).toFixed(2)}`;
-  else saidaTexto = `✅ Nada a recolher/repassar`;
+
+  if (diff > 0)
+    saidaTexto = `💰 Valor em espécie a recolher: R$ ${diff.toFixed(2)}`;
+  else if (diff < 0)
+    saidaTexto = `💸 Repassar ao cliente: R$ ${Math.abs(diff).toFixed(2)}`;
+  else
+    saidaTexto = `✅ Nada a recolher/repassar`;
 
   // ✅ Validação: relógio tem que bater com pix+dinheiro (quando relógio preenchido)
   let aviso = "";
+
   if (temRelogio) {
-    const ok = Math.abs(arred2(totalRelogio - totalValores)) <= 0.01; // tolerância 1 centavo
+    const ok =
+      Math.abs(arred2(totalRelogio - totalValores)) <= 0.01;
+
     if (!ok) {
       aviso = `
         <div style="margin-top:10px; padding:10px; border-radius:10px; background:#7f1d1d; color:#fff;">
@@ -4042,10 +4342,6 @@ function limparPorcentagemAcerto() {
 async function salvarAcerto() {
   const maquina = acharMaquinaPorCampos();
 
-  if (maquina && maquina.pixMaquinaId) {
-  console.log("ID PIX DA MÁQUINA:", maquina.pixMaquinaId);
-}
-  
   if (!maquina) {
     alert("❌ Máquina não encontrada (confira número ou estabelecimento)");
     return;
@@ -4116,16 +4412,13 @@ async function salvarAcerto() {
   const especieRecolher = diff > 0 ? diff : 0;
   const repassarCliente = diff < 0 ? Math.abs(diff) : 0;
 
-    acertos.push({
+  acertos.push({
     numero: maquina.numero,
     estab: maquina.estab,
     relogioAnterior: rAnt,
     relogioAtual: rAtu,
     totalRelogio: totalRelogio,
     pix: pixV,
-    pixMaquinaId: pixMaquinaIdAtual || maquina.pixMaquinaId || "",
-    dataInicioPix: inicioPixAtual || "",
-    dataFimPix: fimPixAtual || "",
     dinheiro: dinV,
     porcentagem: perc,
     cliente: clienteV,
@@ -4154,9 +4447,20 @@ maquina.historicoRelogios.push({
   data: new Date().toISOString()
 });
 
-  salvarNoFirebase();
+  const okFirebase = await salvarNoFirebase(true);
+if (!okFirebase) {
+  alert("❌ Não salvou no Firebase. Acerto não finalizado.");
+  return;
+}
 
-  alert("✅ Acerto salvo com sucesso");
+const okHeroku = await zerarPagamentosHeroku(maquina);
+
+if (!okHeroku) {
+  alert("⚠️ Acerto salvo no Firebase, mas NÃO consegui zerar a Heroku.\n\nVocê precisa zerar manualmente no site do PIX.");
+  return;
+}
+
+alert("✅ Acerto salvo com sucesso e Heroku zerada para o próximo acerto");
 
   document.getElementById("numAcerto").value = "";
   document.getElementById("estabAcerto").value = "";
@@ -4169,26 +4473,6 @@ maquina.historicoRelogios.push({
   if (res) res.innerHTML = "";
 
   voltar();
-}
-
-async function buscarPixAcertoHeroku(pixMaquinaId, inicio, fim) {
-  const url = `https://stronda-music-pix-v4-47b3ce8502e4.herokuapp.com/total-pix-acerto/${pixMaquinaId}`;
-
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ inicio, fim })
-  });
-
-  if (!resp.ok) {
-    const txt = await resp.text();
-    throw new Error("Erro ao buscar PIX na Heroku: " + txt);
-  }
-
-  const dados = await resp.json();
-  return Number(dados.totalPix || 0);
 }
 
 
@@ -4542,7 +4826,8 @@ function abrirDetalheMaquina(numero) {
   const detCpf      = document.getElementById("detCpf");
   const detRg       = document.getElementById("detRg");
   const detPorcBase = document.getElementById("detPorcBase");
-  const erroCpfRg   = document.getElementById("erroCpfRgDetalhe");
+  const detPixMaquinaId = document.getElementById("detPixMaquinaId");
+  const erroCpfRg = document.getElementById("erroCpfRgDetalhe");
 
   // ✅ comportamento automático DEPÓSITO (limpa tudo e trava)
   function aplicarUIStatusDeposito() {
@@ -4623,6 +4908,15 @@ function abrirDetalheMaquina(numero) {
   if (detRg) detRg.value = String(m.rg || "");
   if (detPorcBase) detPorcBase.value = (m.porcBase != null ? String(m.porcBase) : "");
   if (detPixMaquinaId) detPixMaquinaId.value = String(m.pixMaquinaId || "");
+  aplicarPermissaoPixMaquinaId();
+  if (detPixMaquinaId && typeof isAdmin === "function" && !isAdmin()) {
+  detPixMaquinaId.readOnly = true;
+
+detPixMaquinaId.style.setProperty("background-color", "#4b5563", "important");
+detPixMaquinaId.style.setProperty("color", "#ffffff", "important");
+detPixMaquinaId.style.setProperty("border", "1px solid #6b7280", "important");
+detPixMaquinaId.style.setProperty("cursor", "not-allowed", "important");
+}
 
   // ✅ 3) agora sim aplica DEPÓSITO no final e prende no onchange
   if (detStatus) {
@@ -4652,17 +4946,6 @@ function carregarMaquinaPorNumero() {
   const detPixMaquinaId = document.getElementById("detPixMaquinaId");
   const erroCpfRg = document.getElementById("erroCpfRgDetalhe");
 
-  // ✅ PERMISSÃO DO ID PIX DA HEROKU
-  const admin = typeof isAdmin === "function" && isAdmin();
-
-  if (detPixMaquinaId) {
-    detPixMaquinaId.readOnly = !admin;
-    detPixMaquinaId.style.opacity = admin ? "1" : "0.75";
-    detPixMaquinaId.title = admin
-      ? ""
-      : "ID PIX bloqueado. Apenas administrador pode alterar.";
-  }
-
   if (!detNumero) return;
 
   const numeroInput = detNumero.value.trim().toUpperCase();
@@ -4671,7 +4954,6 @@ function carregarMaquinaPorNumero() {
   // se apagou o número, limpa tudo
   if (!numeroInput) {
     maquinaSelecionadaNumero = null;
-
     if (detEstab) detEstab.value = "";
     if (detCliente) detCliente.value = "";
     if (detEndereco) detEndereco.value = "";
@@ -4679,24 +4961,20 @@ function carregarMaquinaPorNumero() {
     if (detFone) detFone.value = "";
     if (tituloMaquina) tituloMaquina.textContent = `🔧 Máquina`;
 
+    // ✅ limpa novos campos
     if (detCpf) detCpf.value = "";
     if (detRg) detRg.value = "";
     if (detPorcBase) detPorcBase.value = "";
-    if (detPixMaquinaId) detPixMaquinaId.value = "";
     if (erroCpfRg) erroCpfRg.style.display = "none";
-
     return;
   }
 
   // procura a máquina
-  const m = (maquinas || []).find(
-    x => String(x.numero || "").toUpperCase() === numeroInput
-  );
+  const m = (maquinas || []).find(x => String(x.numero).toUpperCase() === numeroInput);
 
   // não achou
   if (!m) {
     maquinaSelecionadaNumero = null;
-
     if (detEstab) detEstab.value = "";
     if (detCliente) detCliente.value = "";
     if (detEndereco) detEndereco.value = "";
@@ -4704,57 +4982,48 @@ function carregarMaquinaPorNumero() {
     if (detFone) detFone.value = "";
     if (tituloMaquina) tituloMaquina.textContent = `🔧 Máquina não encontrada`;
 
+    // ✅ limpa novos campos
     if (detCpf) detCpf.value = "";
     if (detRg) detRg.value = "";
     if (detPorcBase) detPorcBase.value = "";
-    if (detPixMaquinaId) detPixMaquinaId.value = "";
     if (erroCpfRg) erroCpfRg.style.display = "none";
-
     return;
   }
 
   // achou -> preenche tudo
   maquinaSelecionadaNumero = m.numero;
 
-  if (detEstab) detEstab.value = String(m.estab || "").toUpperCase();
-  if (detCliente) detCliente.value = String(m.cliente || "").toUpperCase();
+  if (detEstab) detEstab.value = (m.estab || "").toUpperCase();
+  if (detCliente) detCliente.value = (m.cliente || "").toUpperCase();
 
   if (detEndereco) {
     if (m.lat != null && m.lng != null) {
       detEndereco.value = `LAT:${Number(m.lat).toFixed(6)} | LNG:${Number(m.lng).toFixed(6)}`;
     } else {
-      detEndereco.value = String(m.endereco || "").toUpperCase();
+      detEndereco.value = (m.endereco || "").toUpperCase();
     }
   }
 
-  if (detStatus) detStatus.value = String(m.status || "ALUGADA").toUpperCase();
+  if (detStatus) detStatus.value = (m.status || "ALUGADA");
   if (detFone) detFone.value = pegarTelefoneDaMaquina(m);
 
-  if (tituloMaquina) {
-    tituloMaquina.textContent = `🔧 ${m.estab} (JB Nº ${m.numero})`;
-  }
+  if (tituloMaquina) tituloMaquina.textContent = `🔧 ${m.estab} (JB Nº ${m.numero})`;
 
   // ✅ preenche CPF/RG
   if (detCpf) detCpf.value = String(m.cpf || "");
   if (detRg) detRg.value = String(m.rg || "");
 
   // ✅ preenche % base
-  if (detPorcBase) {
-    detPorcBase.value = m.porcBase != null ? String(m.porcBase) : "";
-  }
+  if (detPorcBase) detPorcBase.value = (m.porcBase != null ? String(m.porcBase) : "");
 
-  // ✅ ID PIX DA HEROKU — COLABORADOR VÊ, MAS NÃO ALTERA
-  if (detPixMaquinaId) {
-    detPixMaquinaId.value = String(m.pixMaquinaId || "");
-    detPixMaquinaId.readOnly = !admin;
-    detPixMaquinaId.style.opacity = admin ? "1" : "0.75";
-  }
+  if (detPixMaquinaId) detPixMaquinaId.value = String(m.pixMaquinaId || "");
+  aplicarPermissaoPixMaquinaId();
 
-  // ✅ aviso: precisa ter CPF ou RG
+  // ✅ aviso: precisa ter CPF ou RG (pelo menos um)
   if (erroCpfRg) {
     const cpf = String(m.cpf || "").trim();
     const rg = String(m.rg || "").trim();
-    erroCpfRg.style.display = !cpf && !rg ? "block" : "none";
+    erroCpfRg.style.display = (!cpf && !rg) ? "block" : "none";
   }
 }
 
@@ -4777,68 +5046,37 @@ function isoLocalAgora(d = new Date()) {
 }
 
 
-async function sincronizarMaquinaPix(maquina) {
-  try {
-    if (!maquina || !maquina.pixMaquinaId) return;
-
-    const numero = String(maquina.numero || "").trim();
-    const status = String(maquina.status || "").toUpperCase();
-
-    let nomePix = String(maquina.estab || "").trim();
-    let descricaoPix = `Maquina ${numero}`;
-
-    if (status.includes("DEP")) {
-      nomePix = `Deposito Stronda Music ${numero}`;
-      descricaoPix = `Maquina ${numero}`;
-    }
-
-    if (!nomePix || !numero) return;
-
-    await fetch(`https://stronda-music-pix-v4-47b3ce8502e4.herokuapp.com/sincronizar-maquina-contabilidade/${maquina.pixMaquinaId}`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        nome: nomePix,
-        descricao: descricaoPix
-      })
-    });
-
-    console.log("✅ Máquina PIX sincronizada:", nomePix, descricaoPix);
-
-  } catch (e) {
-    console.error("❌ Erro ao sincronizar máquina PIX:", e);
-  }
-}
-
-
-
 function arAutoPorNumero() {
   const numEl = document.getElementById("arNum");
   const estabEl = document.getElementById("arEstab");
-  const cliEl = document.getElementById("arCliente");
+  const relEl = document.getElementById("arCliente");
 
-  if (!numEl || !estabEl || !cliEl) return;
+  if (!numEl || !estabEl || !relEl) return;
 
   const num = (numEl.value || "").trim().toUpperCase();
   numEl.value = num;
 
   estabEl.value = "";
-  cliEl.value = "";
+  relEl.value = "";
 
   if (!num) return;
 
   const m = (maquinas || []).find(x => String(x.numero || "").toUpperCase() === num);
+
   if (!m) {
     estabEl.value = "❌ MÁQUINA NÃO ENCONTRADA";
-    cliEl.value = "";
+    relEl.value = "";
     return;
   }
 
   estabEl.value = String(m.estab || "").toUpperCase();
-  cliEl.value = String(m.cliente || "").toUpperCase();
+
+  const ult = m.ultimoRelogio != null ? Number(m.ultimoRelogio) : 0;
+  relEl.value = String(parseInt(ult, 10) || 0);
 }
+
+
+
 async function salvarRelogioAtualAdmin() {
   if (!exigirAdmin()) return; // ✅ só ADMIN/MASTER
 
@@ -4890,56 +5128,53 @@ function exigirLogado() {
 
 async function salvarAlteracoesMaquina() {
   try {
-    const detNumero   = document.getElementById("detNumero");
-    const detEstab    = document.getElementById("detEstab");
-    const detCliente  = document.getElementById("detCliente");
-    const detEndereco = document.getElementById("detEndereco");
-    const detStatus   = document.getElementById("detStatus");
-    const detFone     = document.getElementById("detFone");
-    const detRota     = document.getElementById("detRota");
+    const detNumero  = document.getElementById("detNumero");
+    const detEstab   = document.getElementById("detEstab");
+    const detCliente = document.getElementById("detCliente");
+    const detEndereco= document.getElementById("detEndereco");
+    const detStatus  = document.getElementById("detStatus");
+    const detFone    = document.getElementById("detFone");
+    const detRota    = document.getElementById("detRota");
 
+    // ✅ novos campos do detalhe
     const detCpf = document.getElementById("detCpf");
     const detRg  = document.getElementById("detRg");
     const detPorcBase = document.getElementById("detPorcBase");
+    const detPixMaquinaId = document.getElementById("detPixMaquinaId");
+    const pixMaquinaId = (detPixMaquinaId?.value || "").trim();
     const erroCpfRg = document.getElementById("erroCpfRgDetalhe");
-
     const numero = (detNumero?.value || "").trim().toUpperCase();
-
     if (!numero) {
       alert("❌ Informe o número da jukebox.");
       detNumero?.focus();
       return;
     }
 
-    const m = (maquinas || []).find(x =>
-      String(x.numero || "").trim().toUpperCase() === numero
-    );
-
+    // acha a máquina
+    const m = (maquinas || []).find(x => String(x.numero || "").toUpperCase() === numero);
     if (!m) {
       alert("❌ Máquina não encontrada.");
       return;
     }
 
-    const status = detStatus?.value || "ALUGADA";
-
-    const ehDeposito = (typeof isDepositoStatus === "function")
-      ? isDepositoStatus(status)
-      : ["DEPOSITO", "DEPÓSITO"].includes(String(status || "").trim().toUpperCase());
-
+    // lê campos
     const estab = (detEstab?.value || "").trim().toUpperCase();
     const cliente = (detCliente?.value || "").trim().toUpperCase();
     const enderecoTxt = (detEndereco?.value || "").trim().toUpperCase();
+    const status = (detStatus?.value || "ALUGADA");
     const foneTxt = (detFone?.value || "").trim();
-
-    const rota = ehDeposito
-      ? ""
-      : (detRota?.value || "").trim().toUpperCase();
+    const rota = (detRota?.value || "").trim().toUpperCase();
 
     const cpf = (detCpf?.value || "").trim();
-    const rg  = (detRg?.value || "").trim();
-    const pixMaquinaId = (detPixMaquinaId?.value || "").trim();
+    const rg  = (detRg?.value  || "").trim();
+
+    // ✅ só exige CPF/RG se NÃO for DEPÓSITO
+    const ehDeposito = (typeof isDepositoStatus === "function")
+      ? isDepositoStatus(status)
+      : (String(status || "").toUpperCase() === "DEPOSITO" || String(status || "").toUpperCase() === "DEPÓSITO");
 
     if (!ehDeposito) {
+      // ALUGADA (ou qualquer status que use cliente)
       if (!cpf && !rg) {
         if (erroCpfRg) erroCpfRg.style.display = "block";
         alert("❌ Preencha CPF ou RG (pelo menos um).");
@@ -4949,74 +5184,99 @@ async function salvarAlteracoesMaquina() {
         if (erroCpfRg) erroCpfRg.style.display = "none";
       }
     } else {
+      // DEPÓSITO: não valida documento
       if (erroCpfRg) erroCpfRg.style.display = "none";
     }
 
+    // ✅ % base do cliente (0 a 100)
     let porcBase = Number(detPorcBase?.value || 0);
     if (!Number.isFinite(porcBase)) porcBase = 0;
     if (porcBase < 0) porcBase = 0;
     if (porcBase > 100) porcBase = 100;
 
+    
+    // telefone -> ddd/tel (igual seu padrão)
     const nums = foneTxt.replace(/\D/g, "").slice(0, 11);
     const ddd = nums.slice(0, 2);
     const tel = nums.slice(2);
 
-    const statusAntes = String(m.status || "").trim().toUpperCase();
-
-m.status = (typeof normalizarStatus === "function")
-  ? normalizarStatus(status)
-  : String(status || "ALUGADA").trim().toUpperCase();
-
-const statusDepois = String(m.status || "").trim().toUpperCase();
-
-if (statusAntes.includes("DEP") && statusDepois === "ALUGADA") {
-  m.alugadaEm = new Date().toISOString();
-}
+    // aplica alterações no objeto
+    m.status = normalizarStatus ? normalizarStatus(status) : String(status || "ALUGADA").trim().toUpperCase();
 
     if (ehDeposito) {
-      m.estab = (typeof labelDeposito === "function")
-        ? labelDeposito()
-        : "DEPOSITO";
+  // ✅ antes de mudar para DEPÓSITO, guarda o ponto antigo
+  const estabAntigo = String(m.estab || "").trim().toUpperCase();
+  const numeroAntigo = String(m.numero || "").trim().toUpperCase();
 
-      m.cliente = "";
-      m.endereco = "";
-      m.cpf = "";
-      m.rg = "";
-      m.porcBase = 0;
+  // ✅ DEPÓSITO: sem cliente, sem docs, sem telefone
+  m.estab = (typeof labelDeposito === "function") ? labelDeposito() : "DEPÓSITO";
+  m.cliente = "";
+  m.cpf = "";
+  m.rg = "";
+  m.porcBase = 0;
+  m.pixMaquinaId = pixMaquinaId;
+  m.rota = "";
+
+  // ✅ apaga ocorrências desse ponto antigo
+  ocorrencias = (ocorrencias || []).filter(o => {
+    const oNum = String(o.numero || o.num || o.jb || "").trim().toUpperCase();
+    const oEst = String(o.estab || o.estabelecimento || "").trim().toUpperCase();
+
+    return !(oNum === numeroAntigo && oEst === estabAntigo);
+  });
+
+  window.ocorrencias = ocorrencias;
+
+      // ✅ limpa telefone também (pra não aparecer mais)
       m.ddd = "";
       m.tel = "";
       m.foneFormatado = "";
-      m.rota = ""; // ✅ AQUI LIMPA A ROTA ANTIGA
     } else {
+      // ✅ ALUGADA: normal
       m.estab = estab;
       m.cliente = cliente;
-      m.endereco = enderecoTxt;
       m.cpf = cpf;
       m.rg = rg;
       m.porcBase = porcBase;
+      m.pixMaquinaId = pixMaquinaId;
+      m.rota = rota;
+
+      // telefone normal
       m.ddd = ddd;
       m.tel = tel;
-      m.foneFormatado = foneTxt;
-      m.rota = rota;
-      m.pixMaquinaId = pixMaquinaId;
+      m.foneFormatado = (typeof formatarTelefoneBR === "function")
+        ? formatarTelefoneBR(foneTxt)
+        : String(foneTxt || "");
     }
 
-    const ok = await salvarNoFirebase(true);
+    // ✅ endereço / localização manual
+m.endereco = enderecoTxt;
+
+const coordsManual = extrairCoordsDoTexto(enderecoTxt);
+
+if (coordsManual && Number.isFinite(coordsManual.lat) && Number.isFinite(coordsManual.lng)) {
+  m.lat = coordsManual.lat;
+  m.lng = coordsManual.lng;
+  m.gpsUpdatedAt = new Date().toISOString();
+  m.gpsAccuracy = null;
+}
+
+    // ✅ IMPORTANTE:
+    // Removido o bloco que sobrescrevia DEPÓSITO:
+    // m.cpf = cpf; m.rg = rg; m.porcBase = porcBase;
+
+    // persistir
+    const ok = (typeof salvarNoFirebase === "function") ? await salvarNoFirebase(true) : true;
     if (!ok) return;
 
-    try { listarMaquinas(); } catch {}
-    try { atualizarStatus(); } catch {}
-    try { renderRotas(); } catch {}
-    try { preencherSelectRotas(); } catch {}
-    try { atualizarAlertaOcorrencias(); } catch {}
+    await sincronizarMaquinaPix(m);
 
     alert("✅ Alterações salvas com sucesso!");
   } catch (e) {
-    console.error("Erro ao salvar alterações:", e);
-    alert("❌ Erro ao salvar alterações da máquina.");
+    console.error("❌ Erro em salvarAlteracoesMaquina:", e);
+    alert("❌ Não consegui salvar. Veja o Console (F12).");
   }
 }
-
 
 
 function pedirSenhaAdmin() {
@@ -5508,6 +5768,24 @@ function fmtBRLInt(v) {
 }
 
 
+function fcSangriaKey() {
+  const emp = (window.empresaAtualId || window.empresaIdAtual || "GERAL");
+  const modo = String(window.__fcModo || window._fcModo || "DIARIO").toUpperCase();
+  const ini = document.getElementById("fcIni")?.value || "";
+  const fim = document.getElementById("fcFim")?.value || "";
+  return `sangria_caixa_${emp}_${modo}_${ini}_${fim}`;
+}
+
+function fcGetSangria() {
+  return Number(localStorage.getItem(fcSangriaKey()) || 0);
+}
+
+window.fcSalvarSangria = function () {
+  const v = Number(document.getElementById("fcSangriaValor")?.value || 0);
+  localStorage.setItem(fcSangriaKey(), String(v));
+  renderFechamentoCaixa();
+};
+
 
 function renderFechamentoCaixa() {
   const tela = document.getElementById("fechamentoCaixa") || document;
@@ -5619,9 +5897,14 @@ function renderFechamentoCaixa() {
 
   grupo.forEach(g => {
 
-    const totalRel = g.totalRel;
-    const pix = g.pix;
-    const especie = g.especie;
+    const valAll = fcGetValoresOverrides();
+    const valOvr = valAll[pKey]?.[g.nome] || {};
+
+    let pix = valOvr.pix != null ? Number(valOvr.pix) : g.pix;
+    let especie = valOvr.especie != null ? Number(valOvr.especie) : g.especie;
+
+    let totalRel = pix + especie;
+
 
     const pctBase = totalRel > 0 ? (g.clienteBase / totalRel) * 100 : 0;
     const pctOverride = ovr[g.nome];
@@ -5644,11 +5927,12 @@ T_empresa += empresaInt;
 
 
     const btnEditar = (typeof fcIsAdmin === "function" && fcIsAdmin())
-      ? `<button type="button" data-editarpct="${g.nome}"
-          style="padding:10px 14px;border:none;border-radius:12px;background:#38bdf8;color:#0b1220;font-weight:900;cursor:pointer;">
-          ✏️ Editar %
-        </button>`
-      : "";
+  ? `<button type="button"
+      onclick="fcAbrirModalValoresFC('${String(g.nome).replace(/'/g, "\\'")}', ${totalInt}, ${pixInt}, ${especieInt}, ${pctUsado})"
+      style="padding:10px 14px;border:none;border-radius:12px;background:#38bdf8;color:#0b1220;font-weight:900;cursor:pointer;">
+      ✏️ Editar valores
+    </button>`
+  : "";
 
     let saldoTexto = "";
     if (saldoLiquido > 0) {
@@ -5688,7 +5972,8 @@ T_empresa += empresaInt;
     `;
   });
 
-  const saldoLiquidoGeral = T_empresa - T_pix;
+  const sangria = Math.round(fcGetSangria());
+  const saldoLiquidoGeral = T_empresa - T_pix - sangria;
 
   let saldoTopo = "";
   if (saldoLiquidoGeral > 0) {
@@ -5699,27 +5984,48 @@ T_empresa += empresaInt;
     saldoTopo = `✅ <b>Fechado (zerado)</b>`;
   }
 
-  outResumo.innerHTML = `
-    <div style="background:#0f172a;padding:12px;border-radius:12px;line-height:1.6;">
-      <div style="text-align:center;font-weight:900;">Modo: ${modoMostrar}</div>
-      <div style="text-align:center;">Período: ${iniEl.value.split("-").reverse().join("/")} até ${fimEl.value.split("-").reverse().join("/")}</div>
+outResumo.innerHTML = `
+  <div style="background:#0f172a;padding:12px;border-radius:12px;line-height:1.6;">
+    <div style="text-align:center;font-weight:900;">Modo: ${modoMostrar}</div>
+    <div style="text-align:center;">Período: ${iniEl.value.split("-").reverse().join("/")} até ${fimEl.value.split("-").reverse().join("/")}</div>
 
-      <hr style="opacity:.2;margin:10px 0;">
+    <hr style="opacity:.2;margin:10px 0;">
 
-      ⏱️ <b>Total (Relógio):</b> ${fmtBRL(T_totalRel)}<br>
-      💳 <b>Total PIX:</b> ${fmtBRL(T_pix)}<br>
-      💵 <b>Total Espécie:</b> ${fmtBRL(T_especie)}<br><br>
+    ⏱️ <b>Total (Relógio):</b> ${fmtBRL(T_totalRel)}<br>
+    💳 <b>Total PIX:</b> ${fmtBRL(T_pix)}<br>
+    💵 <b>Total Espécie:</b> ${fmtBRL(T_especie)}<br><br>
 
-      👤 <b>Total Comissão (Clientes):</b> ${fmtBRL(T_cliente)}<br>
-      🏢 <b>Total Empresa (Direito após comissão):</b> ${fmtBRL(T_empresa)}<br><br>
+    👤 <b>Total Comissão (Clientes):</b> ${fmtBRL(T_cliente)}<br>
+    🏢 <b>Total Empresa (Direito após comissão):</b> ${fmtBRL(T_empresa)}<br><br>
 
-      <div style="padding:10px;border-radius:12px;background:#111827;">
-        ${saldoTopo}
-      </div>
+    💸 <b>Sangria já recebida:</b> ${fmtBRL(sangria)}<br>
 
-      <div style="margin-top:10px;">✅ <b>Qtd acertos:</b> ${lista.length}</div>
+    <div style="padding:10px;border-radius:12px;background:#111827;text-align:center;">
+      ${saldoTopo}
     </div>
-  `;
+
+    <div style="margin-top:10px;text-align:center;">
+      ✅ <b>Qtd acertos:</b> ${lista.length}
+    </div>
+
+    <br>
+
+    
+    <div style="margin:10px 0;padding:10px;border-radius:12px;background:#111827;">
+      <label style="font-weight:900;">💸 Lançar/alterar sangria do período</label>
+      <input id="fcSangriaValor"
+             type="number"
+             step="1"
+             value=""
+             style="width:100%;padding:10px;border-radius:10px;margin-top:6px;">
+      <button type="button"
+              onclick="fcSalvarSangria()"
+              style="margin-top:8px;padding:10px;border-radius:10px;font-weight:900;">
+        💾 Salvar sangria
+      </button>
+    </div>
+  </div>
+`;
 
   outLista.innerHTML = html;
 }
@@ -6261,8 +6567,6 @@ function salvarOcorrencia() {
   listarOcorrencias();
   alert("✅ Ocorrência salva!");
 }
-
-
 
 function listarOcorrencias() {
   const tela = document.getElementById("ocorrencias") || document;
@@ -7034,6 +7338,22 @@ if (!ok) alert("❌ Não consegui abrir o WhatsApp.");
 }
 
 
+function aplicarPermissaoPixAcerto() {
+  const pix = document.getElementById("pix");
+  if (!pix) return;
+
+  if (typeof isAdmin === "function" && isAdmin()) {
+    pix.readOnly = false;
+    pix.style.background = "";
+  } else {
+    pix.readOnly = true;
+
+pix.style.setProperty("background-color", "#4b5563", "important");
+pix.style.setProperty("color", "#ffffff", "important");
+pix.style.setProperty("border", "1px solid #6b7280", "important");
+pix.style.setProperty("cursor", "not-allowed", "important");
+  }
+}
 
 
 // =====================
@@ -9191,7 +9511,7 @@ window.fcEnsureModalPct = function fcEnsureModalPct() {
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
     ">
       <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
-        <div style="font-weight:800; font-size:18px;">✏️ Editar % do cliente</div>
+        <div style="font-weight:800; font-size:18px;">✏️ Editar valores do cliente</div>
         <button id="btnFecharModalPctFC" type="button" style="
           width:36px; height:36px;
           border-radius:10px;
@@ -9988,17 +10308,1062 @@ function pedirSenhaMasterMask(msg = "🔐 Digite a senha do MASTER:") {
   });
 }
 
+
+// ===============================
+// EDITAR PIX + ESPÉCIE + % NO FECHAMENTO
+// ===============================
+const FC_VALORES_KEY = "fcValoresOverride";
+
+function fcGetValoresOverrides() {
+  try {
+    return JSON.parse(localStorage.getItem(FC_VALORES_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function fcSetValoresOverrides(obj) {
+  localStorage.setItem(FC_VALORES_KEY, JSON.stringify(obj || {}));
+}
+
+window.fcAbrirModalValoresFC = function(estab, total, pix, especie, pct) {
+  if (typeof fcIsAdmin === "function" && !fcIsAdmin()) {
+    alert("Somente ADMIN pode editar.");
+    return;
+  }
+
+  window.__valoresCtxFC = {
+    estab: String(estab || "").trim(),
+    total: Number(total || 0),
+    pix: Number(pix || 0),
+    especie: Number(especie || 0),
+    pct: Number(pct || 0)
+  };
+
+  let modal = document.getElementById("modalEditarValoresFC");
+
+  if (!modal) {
+    modal = document.createElement("div");
+    modal.id = "modalEditarValoresFC";
+    modal.style.cssText = `
+      display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);
+      z-index:99999;align-items:center;justify-content:center;
+    `;
+
+    modal.innerHTML = `
+      <div style="background:#1e293b;color:white;padding:18px;border-radius:14px;width:380px;max-width:95%;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <h3 style="margin:0;">✏️ Editar fechamento</h3>
+          <button onclick="document.getElementById('modalEditarValoresFC').style.display='none'"
+            style="background:#38bdf8;border:0;border-radius:10px;padding:8px 18px;font-weight:900;">X</button>
+        </div>
+
+        <p id="valFcEstab" style="font-weight:900;margin-top:12px;"></p>
+
+        <label>PIX</label>
+        <input id="valFcPix" type="number" step="0.01" oninput="fcPreviewValoresFC()"
+          style="width:100%;padding:10px;margin:4px 0 10px;border-radius:8px;">
+
+        <label>Espécie</label>
+        <input id="valFcEspecie" type="number" step="0.01" oninput="fcPreviewValoresFC()"
+          style="width:100%;padding:10px;margin:4px 0 10px;border-radius:8px;">
+
+        <label>% do Cliente</label>
+        <input id="valFcPct" type="number" step="0.01" oninput="fcPreviewValoresFC()"
+          style="width:100%;padding:10px;margin:4px 0 10px;border-radius:8px;">
+
+        <div style="line-height:1.6;margin:10px 0;">
+          Total: <b id="valFcTotal"></b><br>
+          Cliente: <b id="valFcCliente"></b><br>
+          Empresa: <b id="valFcEmpresa"></b><br>
+          Líquido: <b id="valFcLiquido"></b>
+        </div>
+
+        <button onclick="document.getElementById('modalEditarValoresFC').style.display='none'"
+          style="width:100%;padding:12px;border:0;border-radius:12px;background:#38bdf8;font-weight:900;margin-top:8px;">
+          Cancelar
+        </button>
+
+        <button onclick="fcSalvarValoresFC()"
+          style="width:100%;padding:12px;border:0;border-radius:12px;background:#38bdf8;font-weight:900;margin-top:8px;">
+          Salvar
+        </button>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+  }
+
+  document.getElementById("valFcEstab").textContent = "Estab: " + window.__valoresCtxFC.estab;
+  document.getElementById("valFcPix").value = pix;
+  document.getElementById("valFcEspecie").value = especie;
+  document.getElementById("valFcPct").value = pct;
+
+  modal.style.display = "flex";
+  fcPreviewValoresFC();
+};
+
+window.fcPreviewValoresFC = function() {
+  const pix = Number(document.getElementById("valFcPix")?.value || 0);
+  const especie = Number(document.getElementById("valFcEspecie")?.value || 0);
+  const pct = Number(document.getElementById("valFcPct")?.value || 0);
+
+  const total = pix + especie;
+  const cliente = total * (pct / 100);
+  const empresa = total - cliente;
+  const liquido = empresa - pix;
+
+  document.getElementById("valFcTotal").textContent = fmtBRL(total);
+  document.getElementById("valFcCliente").textContent = fmtBRL(cliente);
+  document.getElementById("valFcEmpresa").textContent = fmtBRL(empresa);
+
+  document.getElementById("valFcLiquido").textContent =
+    liquido >= 0
+      ? "A recolher " + fmtBRL(liquido)
+      : "A repassar " + fmtBRL(Math.abs(liquido));
+};
+
+window.fcSalvarValoresFC = function() {
+  const ctx = window.__valoresCtxFC;
+  if (!ctx?.estab) return alert("Sem contexto do estabelecimento.");
+
+  const pix = Number(document.getElementById("valFcPix")?.value || 0);
+  const especie = Number(document.getElementById("valFcEspecie")?.value || 0);
+  const pct = Number(document.getElementById("valFcPct")?.value || 0);
+
+  if (pix < 0 || especie < 0) return alert("PIX/Espécie não pode ser negativo.");
+  if (pct < 0 || pct > 100) return alert("% inválida. Use de 0 a 100.");
+
+  const key = typeof fcPeriodoKey === "function" ? fcPeriodoKey() : "";
+  if (!key) return alert("Erro ao pegar período.");
+
+  const allVal = fcGetValoresOverrides();
+  allVal[key] = allVal[key] || {};
+  allVal[key][ctx.estab] = { pix, especie };
+
+  fcSetValoresOverrides(allVal);
+
+  const allPct = typeof fcGetPctOverrides === "function" ? fcGetPctOverrides() : {};
+  allPct[key] = allPct[key] || {};
+  allPct[key][ctx.estab] = pct;
+
+  if (typeof fcSetPctOverrides === "function") fcSetPctOverrides(allPct);
+
+  document.getElementById("modalEditarValoresFC").style.display = "none";
+  window.__valoresCtxFC = null;
+
+  renderFechamentoCaixa();
+  alert("✅ Valores do fechamento atualizados!");
+};
+
+
+// ✅ Faz o botão voltar do celular/navegador voltar tela do sistema
+window.addEventListener("load", () => {
+  history.pushState({ telaSistema: true }, "", location.href);
+});
+
+window.addEventListener("popstate", function () {
+  const appVisivel = !document.getElementById("app")?.classList.contains("escondido");
+  const loginVisivel = !document.getElementById("telaLogin")?.classList.contains("escondido");
+
+  // Se estiver dentro do sistema, volta para tela anterior/menu
+  if (appVisivel && !loginVisivel) {
+    try {
+      voltar();
+    } catch (e) {
+      abrir("menu");
+    }
+
+    history.pushState({ telaSistema: true }, "", location.href);
+    return;
+  }
+
+  // Se estiver no login, deixa sair normal
+});
+
 window.pedirSenhaMasterMask = pedirSenhaMasterMask;
 
+// =====================
+// 📈 GRÁFICO DE DESEMPENHO
+// =====================
 
-document.addEventListener("DOMContentLoaded", () => {
-  ["relogioAnterior", "relogioAtual", "pix", "dinheiro", "porcentagem"].forEach(id => {
-    const campo = document.getElementById(id);
-    if (campo) {
-      campo.setAttribute("type", "number");
-      campo.setAttribute("inputmode", "decimal");
-      campo.setAttribute("step", "0.01");
+function gdMeses() {
+  return ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+}
+
+function gdMoney(v) {
+  return Number(v || 0).toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL"
+  });
+}
+
+function gdDataLocal(data) {
+  const s = String(data || "");
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0);
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function gdValorEmpresa(a) {
+  return Number(a?.empresa || 0);
+}
+
+function gdKeyMaquina(a) {
+  const numero = String(a?.numero || a?.num || a?.jb || "").trim().toUpperCase();
+  const estab = String(a?.estab || a?.estabelecimento || a?.nomeEstabelecimento || "").trim().toUpperCase();
+  return `${numero}||${estab}`;
+}
+
+function gdMontarDados(ano) {
+  const mapa = new Map();
+
+  // ✅ coloca TODAS as máquinas cadastradas, menos depósito
+  (maquinas || []).forEach((m) => {
+    const numero = String(m.numero || "").trim().toUpperCase();
+    const estab = String(m.estab || "").trim().toUpperCase();
+    const status = String(m.status || "").trim().toUpperCase();
+
+    if (!numero || !estab) return;
+    if (status.includes("DEP")) return;
+
+    const key = `${numero}||${estab}`;
+
+    mapa.set(key, {
+      numero,
+      estab,
+      meses: Array(12).fill(0),
+      totalAno: 0
+    });
+  });
+
+  // ✅ soma os acertos em cima da máquina cadastrada
+  (acertos || []).forEach((a) => {
+
+    const DATA_INICIO_ANALISE = "2026-06-01";
+    
+       
+    const d = gdDataLocal(a.data);
+    if (!d || d.getFullYear() !== Number(ano)) return;
+
+    const inicioAnalise = gdDataLocal(DATA_INICIO_ANALISE);
+    if (inicioAnalise && d < inicioAnalise) return;
+
+    const numero = String(a.numero || a.num || a.jb || "").trim().toUpperCase();
+    const estab = String(a.estab || a.estabelecimento || a.nomeEstabelecimento || "").trim().toUpperCase();
+    if (!numero || !estab) return;
+
+    const key = `${numero}||${estab}`;
+    if (!mapa.has(key)) return; // ✅ se não está cadastrada ativa, ignora
+
+    const item = mapa.get(key);
+    const mes = d.getMonth();
+    const valor = gdValorEmpresa(a);
+
+    item.meses[mes] += valor;
+    item.totalAno += valor;
+  });
+
+  return [...mapa.values()];
+}
+
+
+
+function gdPreencherAnos() {
+  const sel = document.getElementById("gdAno");
+  if (!sel) return;
+
+  const anos = new Set();
+
+  (acertos || []).forEach((a) => {
+    const d = gdDataLocal(a.data);
+    if (d) anos.add(d.getFullYear());
+  });
+
+  const anoAtual = new Date().getFullYear();
+  anos.add(anoAtual);
+
+  const lista = [...anos].sort((a, b) => b - a);
+
+  const valorAtual = sel.value || String(anoAtual);
+
+  sel.innerHTML = lista.map(y => {
+    return `<option value="${y}">${y}</option>`;
+  }).join("");
+
+  if (lista.includes(Number(valorAtual))) {
+    sel.value = valorAtual;
+  }
+}
+
+function abrirGraficoDesempenho() {
+  abrir("graficoDesempenho");
+  gdPreencherAnos();
+  renderGraficoDesempenho();
+}
+
+window.abrirGraficoDesempenho = abrirGraficoDesempenho;
+
+function renderGraficoDesempenho() {
+  const listaEl = document.getElementById("gdLista");
+  const ano = Number(document.getElementById("gdAno")?.value || new Date().getFullYear());
+  const mesSelecionado = document.getElementById("gdMes")?.value ?? "";
+
+  if (!listaEl) return;
+
+  let lista = gdMontarDados(ano);
+
+  if (!lista.length) {
+    listaEl.innerHTML = `
+      <div style="background:#0f172a;padding:14px;border-radius:14px;">
+        ❌ Nenhum acerto encontrado para ${ano}.
+      </div>
+    `;
+    return;
+  }
+
+  if (mesSelecionado !== "") {
+    const m = Number(mesSelecionado);
+
+    lista = lista
+      .map(item => {
+        const atual = Number(item.meses[m] || 0);
+        const anterior = m > 0 ? Number(item.meses[m - 1] || 0) : 0;
+        const perc = anterior > 0 ? ((atual - anterior) / anterior) * 100 : null;
+
+        return {
+          ...item,
+          valorOrdenar: atual,
+          mesAtual: atual,
+          mesAnterior: anterior,
+          perc
+        };
+      })
+      .sort((a, b) => b.valorOrdenar - a.valorOrdenar);
+  } else {
+    lista = lista
+      .map(item => ({
+        ...item,
+        valorOrdenar: item.totalAno
+      }))
+      .sort((a, b) => b.valorOrdenar - a.valorOrdenar);
+  }
+
+  listaEl.innerHTML = "";
+
+  lista.forEach((item, idx) => {
+    const card = document.createElement("div");
+    card.style.background = "#0f172a";
+    card.style.borderRadius = "16px";
+    card.style.padding = "14px";
+    card.style.marginBottom = "16px";
+    card.style.border = "1px solid rgba(255,255,255,.08)";
+
+    const titulo = document.createElement("div");
+    titulo.style.fontWeight = "900";
+    titulo.style.fontSize = "17px";
+    titulo.style.marginBottom = "4px";
+    titulo.textContent = `${idx + 1}º ${item.estab}`;
+
+    const subtitulo = document.createElement("div");
+    subtitulo.style.opacity = ".9";
+    subtitulo.style.fontWeight = "800";
+    subtitulo.style.marginBottom = "10px";
+    subtitulo.textContent = `JB Nº ${item.numero}`;
+
+    const info = document.createElement("div");
+    info.style.fontSize = "13px";
+    info.style.opacity = ".9";
+    info.style.marginBottom = "8px";
+
+    if (mesSelecionado !== "") {
+      const nomeMes = gdMeses()[Number(mesSelecionado)];
+      const seta = item.perc == null ? "—" : item.perc >= 0 ? "▲" : "▼";
+      const percTxt = item.perc == null ? "sem comparação" : `${seta} ${item.perc.toFixed(1)}%`;
+
+      info.innerHTML = `${nomeMes}: <b>${gdMoney(item.mesAtual)}</b> · ${percTxt}`;
+    } else {
+      info.innerHTML = `Ano: <b>${gdMoney(item.totalAno)}</b>`;
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.style.height = "170px";
+    canvas.style.width = "100%";
+    canvas.style.display = "block";
+    canvas.style.background = "#0b1220";
+    canvas.style.borderRadius = "12px";
+
+    card.appendChild(titulo);
+    card.appendChild(subtitulo);
+    card.appendChild(info);
+    card.appendChild(canvas);
+
+    listaEl.appendChild(card);
+
+    setTimeout(() => gdDesenharGrafico(canvas, item.meses, mesSelecionado), 0);
+  });
+}
+
+window.renderGraficoDesempenho = renderGraficoDesempenho;
+
+function gdDesenharGrafico(canvas, meses, mesSelecionado = "") {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+
+  canvas.width = Math.floor(rect.width * dpr);
+  canvas.height = Math.floor(170 * dpr);
+
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const W = rect.width;
+  const H = 170;
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = "#0b1220";
+  ctx.fillRect(0, 0, W, H);
+
+  const padL = 28;
+  const padR = 12;
+  const padT = 14;
+  const padB = 28;
+
+  const max = Math.max(...meses, 1);
+  const nomes = gdMeses();
+
+  // linhas de fundo
+  ctx.strokeStyle = "rgba(255,255,255,.10)";
+  ctx.lineWidth = 1;
+
+  for (let i = 0; i < 4; i++) {
+    const y = padT + ((H - padT - padB) / 3) * i;
+    ctx.beginPath();
+    ctx.moveTo(padL, y);
+    ctx.lineTo(W - padR, y);
+    ctx.stroke();
+  }
+
+  const pontos = meses.map((v, i) => {
+    const x = padL + ((W - padL - padR) / 11) * i;
+    const y = H - padB - ((Number(v || 0) / max) * (H - padT - padB));
+    return { x, y, v, i };
+  });
+
+  // linha
+  ctx.strokeStyle = "#22c55e";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+
+  pontos.forEach((p, i) => {
+    if (i === 0) ctx.moveTo(p.x, p.y);
+    else ctx.lineTo(p.x, p.y);
+  });
+
+  ctx.stroke();
+
+  // pontos e meses
+  pontos.forEach((p) => {
+    const selecionado = mesSelecionado !== "" && Number(mesSelecionado) === p.i;
+
+    ctx.beginPath();
+    ctx.fillStyle = selecionado ? "#facc15" : "#38bdf8";
+    ctx.arc(p.x, p.y, selecionado ? 5 : 3.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(255,255,255,.85)";
+    ctx.font = "10px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(nomes[p.i], p.x, H - 10);
+  });
+
+  canvas.style.touchAction = "pan-y";
+
+let toqueInicioX = 0;
+let toqueInicioY = 0;
+let toqueMoveu = false;
+let toqueTimer = null;
+
+function mostrarValorMesPorX(clientX) {
+  const rect = canvas.getBoundingClientRect();
+  const xClick = clientX - rect.left;
+
+  let melhor = pontos[0];
+  let dist = Infinity;
+
+  pontos.forEach((p) => {
+    const d = Math.abs(p.x - xClick);
+    if (d < dist) {
+      dist = d;
+      melhor = p;
     }
   });
-});
+
+  const atual = Number(meses[melhor.i] || 0);
+  const anterior = melhor.i > 0 ? Number(meses[melhor.i - 1] || 0) : 0;
+  const perc = anterior > 0 ? ((atual - anterior) / anterior) * 100 : null;
+
+  let msg = `${nomes[melhor.i]}\nEntrou: ${gdMoney(atual)}`;
+
+  if (perc == null) {
+    msg += `\nSem comparação anterior`;
+  } else if (perc >= 0) {
+    msg += `\nSubiu: +${perc.toFixed(1)}%`;
+  } else {
+    msg += `\nCaiu: ${perc.toFixed(1)}%`;
+  }
+
+  alert(msg);
+}
+
+// PC: clique normal
+canvas.onclick = function (ev) {
+  mostrarValorMesPorX(ev.clientX);
+};
+
+// Celular: só mostra se tocar e segurar sem rolar
+canvas.ontouchstart = function (ev) {
+  const t = ev.touches?.[0];
+  if (!t) return;
+
+  toqueInicioX = t.clientX;
+  toqueInicioY = t.clientY;
+  toqueMoveu = false;
+
+  clearTimeout(toqueTimer);
+  toqueTimer = setTimeout(() => {
+    if (!toqueMoveu) {
+      mostrarValorMesPorX(toqueInicioX);
+    }
+  }, 450);
+};
+
+canvas.ontouchmove = function (ev) {
+  const t = ev.touches?.[0];
+  if (!t) return;
+
+  const dx = Math.abs(t.clientX - toqueInicioX);
+  const dy = Math.abs(t.clientY - toqueInicioY);
+
+  if (dx > 8 || dy > 8) {
+    toqueMoveu = true;
+    clearTimeout(toqueTimer);
+  }
+};
+
+canvas.ontouchend = function () {
+  clearTimeout(toqueTimer);
+};}
+
+
+// =====================
+// 🏆 RANKING DE DESEMPENHO
+// =====================
+
+function rkPreencherAnos() {
+  const sel = document.getElementById("rkAno");
+  if (!sel) return;
+
+  const anos = new Set();
+  (acertos || []).forEach((a) => {
+    const d = gdDataLocal(a.data);
+    if (d) anos.add(d.getFullYear());
+  });
+
+  const anoAtual = new Date().getFullYear();
+  anos.add(anoAtual);
+
+  const lista = [...anos].sort((a, b) => b - a);
+  const atual = sel.value || String(anoAtual);
+
+  sel.innerHTML = lista.map(y => `<option value="${y}">${y}</option>`).join("");
+
+  if (lista.includes(Number(atual))) sel.value = atual;
+}
+
+function abrirRankingDesempenho() {
+  abrir("rankingDesempenho");
+  rkPreencherAnos();
+  renderRankingDesempenho();
+}
+
+window.abrirRankingDesempenho = abrirRankingDesempenho;
+
+function rkCorGradual(posicao, total) {
+  // Top 10 verde forte
+  if (posicao <= 10) return "#22c55e";
+
+  if (total <= 11) return "#22c55e";
+
+  const p = (posicao - 11) / Math.max(total - 11, 1);
+
+  // verde -> amarelo -> laranja -> vermelho
+  let r, g, b;
+
+  if (p < 0.33) {
+    const t = p / 0.33;
+    r = 34 + (250 - 34) * t;
+    g = 197 + (204 - 197) * t;
+    b = 94 + (21 - 94) * t;
+  } else if (p < 0.66) {
+    const t = (p - 0.33) / 0.33;
+    r = 250 + (249 - 250) * t;
+    g = 204 + (115 - 204) * t;
+    b = 21 + (22 - 21) * t;
+  } else {
+    const t = (p - 0.66) / 0.34;
+    r = 249 + (239 - 249) * t;
+    g = 115 + (68 - 115) * t;
+    b = 22 + (68 - 22) * t;
+  }
+
+  return `rgb(${Math.round(r)},${Math.round(g)},${Math.round(b)})`;
+}
+
+function renderRankingDesempenho() {
+  const listaEl = document.getElementById("rkLista");
+  const ano = Number(document.getElementById("rkAno")?.value || new Date().getFullYear());
+  const mesSelecionado = document.getElementById("rkMes")?.value ?? "";
+
+  if (!listaEl) return;
+
+  let lista = gdMontarDados(ano);
+
+  if (mesSelecionado !== "") {
+    const m = Number(mesSelecionado);
+    lista = lista.map(item => ({
+      ...item,
+      valorRanking: Number(item.meses[m] || 0)
+    }));
+  } else {
+    lista = lista.map(item => ({
+      ...item,
+      valorRanking: Number(item.totalAno || 0)
+    }));
+  }
+
+  lista = lista
+  .sort((a, b) => b.valorRanking - a.valorRanking);
+
+  if (!lista.length) {
+    listaEl.innerHTML = `
+      <div style="background:#0f172a;padding:14px;border-radius:14px;">
+        ❌ Nenhum rendimento encontrado nesse período.
+      </div>
+    `;
+    return;
+  }
+
+  const nomePeriodo = mesSelecionado === ""
+    ? `Ano ${ano}`
+    : `${gdMeses()[Number(mesSelecionado)]}/${ano}`;
+
+  listaEl.innerHTML = "";
+
+  lista.forEach((item, idx) => {
+    const pos = idx + 1;
+    const cor = rkCorGradual(pos, lista.length);
+
+    const card = document.createElement("div");
+    card.style.background = "#0f172a";
+    card.style.borderRadius = "16px";
+    card.style.padding = "14px";
+    card.style.marginBottom = "12px";
+    card.style.border = "1px solid rgba(255,255,255,.08)";
+    card.style.display = "grid";
+    card.style.gridTemplateColumns = "54px 1fr";
+    card.style.gap = "12px";
+    card.style.alignItems = "center";
+
+    const bolinha = document.createElement("div");
+    bolinha.textContent = pos <= 3 ? ["🥇", "🥈", "🥉"][pos - 1] : pos + "º";
+    bolinha.style.width = "46px";
+    bolinha.style.height = "46px";
+    bolinha.style.borderRadius = "50%";
+    bolinha.style.display = "flex";
+    bolinha.style.alignItems = "center";
+    bolinha.style.justifyContent = "center";
+    bolinha.style.fontWeight = "900";
+    bolinha.style.background = cor;
+    bolinha.style.color = "#07111f";
+    bolinha.style.boxShadow = `0 0 14px ${cor}`;
+
+    const info = document.createElement("div");
+
+    info.innerHTML = `
+      <div style="font-weight:900;font-size:16px;line-height:1.2;">
+        ${item.estab}
+      </div>
+      <div style="font-weight:800;opacity:.9;margin-top:3px;">
+        JB Nº ${item.numero}
+      </div>
+      <div style="margin-top:6px;font-size:14px;">
+        ${nomePeriodo}: <b>${gdMoney(item.valorRanking)}</b>
+      </div>
+    `;
+
+    card.appendChild(bolinha);
+    card.appendChild(info);
+    listaEl.appendChild(card);
+  });
+}
+
+window.renderRankingDesempenho = renderRankingDesempenho;
+
+// =====================
+// ⚠️ MÁQUINAS EM ATENÇÃO
+// =====================
+
+function atPreencherAnos() {
+  const sel = document.getElementById("atAno");
+  if (!sel) return;
+
+  const anos = new Set();
+
+  (acertos || []).forEach((a) => {
+    const d = gdDataLocal(a.data);
+    if (d) anos.add(d.getFullYear());
+  });
+
+  const anoAtual = new Date().getFullYear();
+  anos.add(anoAtual);
+
+  const lista = [...anos].sort((a, b) => b - a);
+  const atual = sel.value || String(anoAtual);
+
+  sel.innerHTML = lista.map(y => `<option value="${y}">${y}</option>`).join("");
+
+  if (lista.includes(Number(atual))) sel.value = atual;
+}
+
+function abrirMaquinasAtencao() {
+  abrir("maquinasAtencao");
+  atPreencherAnos();
+
+  const mesEl = document.getElementById("atMes");
+  if (mesEl) mesEl.value = String(new Date().getMonth());
+
+  renderMaquinasAtencao();
+}
+
+window.abrirMaquinasAtencao = abrirMaquinasAtencao;
+
+function atContarOcorrencias(numero, estab, ano, mes) {
+  const U = (v) => String(v || "").trim().toUpperCase();
+
+  return (ocorrencias || []).filter((o) => {
+    const d = gdDataLocal(o.data);
+    if (!d) return false;
+
+    const numO = U(o.numero || o.num || o.jb);
+    const estO = U(o.estab || o.estabelecimento || o.nomeEstabelecimento);
+
+    return (
+      d.getFullYear() === Number(ano) &&
+      d.getMonth() === Number(mes) &&
+      numO === U(numero) &&
+      estO === U(estab)
+    );
+  }).length;
+}
+
+function atClassificar(item) {
+ 
+  if (item.perc !== null && item.perc <= -30 && item.qtdOcorrencias >= 1) {
+    return { nivel: "ATENÇÃO ALTA", cor: "#ef4444", icone: "🔴", peso: 2 };
+  }
+
+  if (item.perc !== null && item.perc <= -30) {
+    return { nivel: "ATENÇÃO", cor: "#f97316", icone: "🟠", peso: 3 };
+  }
+
+  if (item.perc !== null && item.perc <= -10) {
+    return { nivel: "OBSERVAR", cor: "#facc15", icone: "🟡", peso: 4 };
+  }
+
+  if (item.qtdOcorrencias >= 3) {
+    return { nivel: "OCORRÊNCIAS", cor: "#f97316", icone: "🔧", peso: 5 };
+  }
+
+  return null;
+}
+
+function renderMaquinasAtencao() {
+  const listaEl = document.getElementById("atLista");
+  const ano = Number(document.getElementById("atAno")?.value || new Date().getFullYear());
+  const mes = Number(document.getElementById("atMes")?.value || new Date().getMonth());
+
+  if (!listaEl) return;
+
+  const base = gdMontarDados(ano);
+
+  let lista = base.map((item) => {
+    const atual = Number(item.meses[mes] || 0);
+    const anterior = mes > 0 ? Number(item.meses[mes - 1] || 0) : 0;
+    const perc = anterior > 0 ? ((atual - anterior) / anterior) * 100 : null;
+    const qtdOcorrencias = atContarOcorrencias(item.numero, item.estab, ano, mes);
+
+    const obj = {
+      ...item,
+      atual,
+      anterior,
+      perc,
+      qtdOcorrencias,
+      semAcerto: atual <= 0
+    };
+
+    return {
+      ...obj,
+      classificacao: atClassificar(obj)
+    };
+  }).filter(item => item.classificacao);
+
+  lista.sort((a, b) => {
+    const pa = a.classificacao?.peso || 99;
+    const pb = b.classificacao?.peso || 99;
+    if (pa !== pb) return pa - pb;
+
+    const qa = a.perc == null ? 0 : a.perc;
+    const qb = b.perc == null ? 0 : b.perc;
+    return qa - qb;
+  });
+
+  if (!lista.length) {
+    listaEl.innerHTML = `
+      <div style="background:#0f172a;padding:14px;border-radius:14px;">
+        ✅ Nenhuma máquina em atenção nesse mês.
+      </div>
+    `;
+    return;
+  }
+
+  const nomeMes = gdMeses()[mes];
+
+  listaEl.innerHTML = "";
+
+  lista.forEach((item) => {
+    const cls = item.classificacao;
+
+    const percTxt = item.perc == null
+      ? "Sem comparação anterior"
+      : item.perc >= 0
+        ? `Subiu +${item.perc.toFixed(1)}%`
+        : `Caiu ${item.perc.toFixed(1)}%`;
+
+    
+    const card = document.createElement("div");
+    card.style.background = "#0f172a";
+    card.style.borderRadius = "16px";
+    card.style.padding = "14px";
+    card.style.marginBottom = "12px";
+    card.style.border = `1px solid ${cls.cor}`;
+    card.style.boxShadow = `0 0 12px ${cls.cor}33`;
+
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;">
+        <div>
+          <div style="font-weight:900;font-size:16px;line-height:1.2;">
+            ${item.estab}
+          </div>
+          <div style="font-weight:800;opacity:.9;margin-top:3px;">
+            JB Nº ${item.numero}
+          </div>
+        </div>
+
+        <div style="
+          background:${cls.cor};
+          color:#07111f;
+          padding:8px 10px;
+          border-radius:999px;
+          font-weight:900;
+          white-space:nowrap;
+          font-size:12px;
+        ">
+          ${cls.icone} ${cls.nivel}
+        </div>
+      </div>
+
+      <div style="margin-top:12px;background:#0b1220;border-radius:12px;padding:12px;line-height:1.45;">
+        <div><b>${nomeMes}/${ano}:</b> ${gdMoney(item.atual)}</div>
+        <div><b>Mês anterior:</b> ${gdMoney(item.anterior)}</div>
+        <div><b>Resultado:</b> ${percTxt}</div>
+        <div><b>Ocorrências no mês:</b> ${item.qtdOcorrencias}</div>
+      </div>
+
+      
+      </div>
+    `;
+
+    listaEl.appendChild(card);
+  });
+}
+
+window.renderMaquinasAtencao = renderMaquinasAtencao;
+
+
+
+// =====================
+// 🚫 MÁQUINAS SEM ACERTO
+// =====================
+
+function saDataLocalISO(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dia = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dia}`;
+}
+
+function abrirMaquinasSemAcerto() {
+  abrir("maquinasSemAcerto");
+
+  const dataEl = document.getElementById("saData");
+  if (dataEl && !dataEl.value) {
+    dataEl.value = saDataLocalISO(new Date());
+  }
+
+  renderMaquinasSemAcerto();
+}
+
+window.abrirMaquinasSemAcerto = abrirMaquinasSemAcerto;
+
+function saUltimoAcertoMaquina(numero, estab, ateData) {
+  const U = (v) => String(v || "").trim().toUpperCase();
+  const ate = gdDataLocal(ateData) || new Date();
+
+  let ultimo = null;
+
+  (acertos || []).forEach((a) => {
+    const d = gdDataLocal(a.data);
+    if (!d || d > ate) return;
+
+    const numA = U(a.numero || a.num || a.jb);
+    const estA = U(a.estab || a.estabelecimento || a.nomeEstabelecimento);
+
+    if (numA === U(numero) && estA === U(estab)) {
+      if (!ultimo || d > ultimo) ultimo = d;
+    }
+  });
+
+  return ultimo;
+}
+
+function saDiasEntre(data1, data2) {
+  const d1 = new Date(data1.getFullYear(), data1.getMonth(), data1.getDate());
+  const d2 = new Date(data2.getFullYear(), data2.getMonth(), data2.getDate());
+  return Math.floor((d2 - d1) / (1000 * 60 * 60 * 24));
+}
+
+function renderMaquinasSemAcerto() {
+  const listaEl = document.getElementById("saLista");
+  const dataRefStr = document.getElementById("saData")?.value || saDataLocalISO(new Date());
+
+  if (!listaEl) return;
+
+  const dataRef = gdDataLocal(dataRefStr) || new Date();
+
+  const lista = (maquinas || [])
+    .filter((m) => {
+      const numero = String(m.numero || "").trim().toUpperCase();
+      const estab = String(m.estab || "").trim().toUpperCase();
+      const status = String(m.status || "").trim().toUpperCase();
+
+      if (!numero || !estab) return false;
+      if (status.includes("DEP")) return false;
+
+      return true;
+    })
+    .map((m) => {
+      const numero = String(m.numero || "").trim().toUpperCase();
+      const estab = String(m.estab || "").trim().toUpperCase();
+      const ultimo = saUltimoAcertoMaquina(numero, estab, dataRef);
+
+      if (!ultimo) return null;
+
+      const dias = saDiasEntre(ultimo, dataRef); 
+
+      return {
+        numero,
+        estab,
+        ultimo,
+        dias
+      };
+    })
+
+    .filter(Boolean)
+    .sort((a, b) => b.dias - a.dias);
+
+  if (!lista.length) {
+    listaEl.innerHTML = `
+      <div style="background:#0f172a;padding:14px;border-radius:14px;">
+        ✅ Nenhuma máquina ativa cadastrada.
+      </div>
+    `;
+    return;
+  }
+
+  listaEl.innerHTML = "";
+
+  lista.forEach((item, idx) => {
+    const semHistorico = item.dias === 9999;
+
+    const diasTxt = semHistorico
+      ? "Sem histórico de acerto"
+      : `${item.dias} dias sem acerto`;
+
+    const ultimoTxt = item.ultimo
+      ? item.ultimo.toLocaleDateString("pt-BR")
+      : "Nunca encontrado";
+
+    const cor = semHistorico || item.dias >= 45
+      ? "#ef4444"
+      : item.dias >= 30
+        ? "#f97316"
+        : item.dias >= 15
+          ? "#facc15"
+          : "#22c55e";
+
+    const card = document.createElement("div");
+    card.style.background = "#0f172a";
+    card.style.borderRadius = "16px";
+    card.style.padding = "14px";
+    card.style.marginBottom = "12px";
+    card.style.border = `1px solid ${cor}`;
+    card.style.boxShadow = `0 0 12px ${cor}33`;
+
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;">
+        <div>
+          <div style="font-weight:900;font-size:16px;line-height:1.2;">
+            ${idx + 1}º ${item.estab}
+          </div>
+          <div style="font-weight:800;opacity:.9;margin-top:3px;">
+            JB Nº ${item.numero}
+          </div>
+        </div>
+
+        <div style="
+          background:${cor};
+          color:#07111f;
+          padding:8px 10px;
+          border-radius:999px;
+          font-weight:900;
+          white-space:nowrap;
+          font-size:12px;
+        ">
+          ${semHistorico ? "🚫 SEM HISTÓRICO" : "🚫 " + item.dias + " DIAS"}
+        </div>
+      </div>
+
+      <div style="margin-top:12px;background:#0b1220;border-radius:12px;padding:12px;line-height:1.45;">
+        <div><b>Status:</b> ${diasTxt}</div>
+        <div><b>Último acerto:</b> ${ultimoTxt}</div>
+      </div>
+    `;
+
+    listaEl.appendChild(card);
+  });
+}
+
+window.renderMaquinasSemAcerto = renderMaquinasSemAcerto;
+
 
